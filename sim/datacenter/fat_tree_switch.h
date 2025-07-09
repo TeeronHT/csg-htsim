@@ -84,7 +84,7 @@ public:
 class FatTreeSwitch : public Switch {
 public:
     enum switch_type {
-        NONE = 0, TOR = 1, AGG = 2, CORE = 3
+        NONE = 0, TOR = 1, AGG = 2, CORE = 3, WAN = 4
     };
 
     enum routing_strategy {
@@ -124,6 +124,18 @@ public:
     static void set_ar_fraction(uint16_t f) { assert(f>=1);_ar_fraction = f;} 
     static void set_ar_sticky(uint16_t v) { _ar_sticky = v;} 
 
+    // Multi-DC specific methods
+    void set_dc_id(uint32_t dc_id) { _dc_id = dc_id; }
+    uint32_t get_dc_id() const { return _dc_id; }
+    void set_total_dcs(uint32_t total_dcs) { _total_dcs = total_dcs; }
+    uint32_t get_total_dcs() const { return _total_dcs; }
+    void set_nodes_per_dc(uint32_t nodes_per_dc) { _nodes_per_dc = nodes_per_dc; }
+    uint32_t get_nodes_per_dc() const { return _nodes_per_dc; }
+    
+    // WAN routing logic
+    bool should_route_to_wan(uint32_t dest_host) const;
+    uint32_t get_wan_dest_dc(uint32_t dest_host) const;
+
     static routing_strategy _strategy;
     static uint16_t _ar_fraction;
     static uint16_t _ar_sticky;
@@ -134,6 +146,11 @@ private:
     switch_type _type;
     Pipe* _pipe;
     FatTreeTopology* _ft;
+    
+    // Multi-DC specific fields
+    uint32_t _dc_id;
+    uint32_t _total_dcs;
+    uint32_t _nodes_per_dc;
     
     //CAREFUL: can't always have a single FIB for all up destinations when there are failures!
     vector<FibEntry*>* _uproutes;
