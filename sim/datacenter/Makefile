@@ -2,12 +2,12 @@ CC = g++
 CFLAGS = -Wall -std=c++11 -g -Wsign-compare
 #CFLAGS += -fsanitize=address -fno-omit-frame-pointer -fsanitize=undefined
 CFLAGS += -O2  
-CRT=`pwd`
-INCLUDE= -I/$(CRT)/.. -I$(CRT) 
+CRT:= $(shell pwd)
+INCLUDE= -I"$(CRT)/.." -I"$(CRT)" 
 LIB=-L..
 DEPS=../libhtsim.a
 
-all:	htsim_tcp htsim_ndp htsim_roce htsim_swift htsim_hpcc htsim_eqds htsim_constcca htsim_consterase htsim_constcca_old htsim_roce_new
+all:	htsim_tcp htsim_ndp htsim_roce htsim_swift htsim_hpcc htsim_eqds htsim_constcca htsim_consterase htsim_constcca_old htsim_roce_new htsim_multi_dc
 
 
 htsim_tcp: main_tcp.o firstfit.o ../libhtsim.a vl2_topology.o fat_tree_topology.o fat_tree_switch.o dragon_fly_topology.o bcube_topology.o connection_matrix.o oversubscribed_fat_tree_topology.o shortflows.o multihomed_fat_tree_topology.o star_topology.o
@@ -42,6 +42,9 @@ htsim_constcca_old: main_const_old.o firstfit.o ../libhtsim.a vl2_topology.o fat
 htsim_consterase: main_const_erase.o firstfit.o ../libhtsim.a vl2_topology.o fat_tree_topology.o fat_tree_switch.o bcube_topology.o connection_matrix.o oversubscribed_fat_tree_topology.o shortflows.o multihomed_fat_tree_topology.o star_topology.o generic_topology.o
 	$(CC) $(CFLAGS) firstfit.o main_const_erase.o vl2_topology.o fat_tree_topology.o fat_tree_switch.o bcube_topology.o connection_matrix.o oversubscribed_fat_tree_topology.o shortflows.o star_topology.o multihomed_fat_tree_topology.o generic_topology.o $(LIB) -lhtsim -o htsim_consterase
 
+htsim_multi_dc: main_multi_dc_const_erase.o firstfit.o ../libhtsim.a vl2_topology.o fat_tree_topology.o fat_tree_switch.o bcube_topology.o connection_matrix.o oversubscribed_fat_tree_topology.o shortflows.o multihomed_fat_tree_topology.o star_topology.o generic_topology.o multi_datacenter_topology.o
+	$(CC) $(CFLAGS) firstfit.o main_multi_dc_const_erase.o vl2_topology.o fat_tree_topology.o fat_tree_switch.o bcube_topology.o connection_matrix.o oversubscribed_fat_tree_topology.o shortflows.o star_topology.o multihomed_fat_tree_topology.o generic_topology.o multi_datacenter_topology.o $(LIB) -lhtsim -o htsim_multi_dc
+
 main_tcp.o: main_tcp.cpp ${DEPS}
 	$(CC) $(INCLUDE) $(CFLAGS) -c main_tcp.cpp
 
@@ -67,7 +70,13 @@ main_const_old.o: main_const_old.cpp ${DEPS}
 	$(CC) $(INCLUDE) $(CFLAGS) -c main_const_old.cpp 
 
 main_const_erase.o: main_const_erase.cpp ${DEPS}
-	$(CC) $(INCLUDE) $(CFLAGS) -c main_const_erase.cpp 
+	$(CC) $(INCLUDE) $(CFLAGS) -c main_const_erase.cpp
+
+main_multi_dc_const_erase.o: main_multi_dc_const_erase.cpp ${DEPS}
+	$(CC) $(INCLUDE) $(CFLAGS) -c main_multi_dc_const_erase.cpp
+
+multi_datacenter_topology.o: multi_datacenter/multi_datacenter_topology.cpp multi_datacenter/multi_datacenter_topology.h ${DEPS}
+	$(CC) $(INCLUDE) $(CFLAGS) -c multi_datacenter/multi_datacenter_topology.cpp 
 
 star_topology.o: star_topology.cpp star_topology.h ${DEPS}
 	$(CC) $(INCLUDE) $(CFLAGS) -c star_topology.cpp 

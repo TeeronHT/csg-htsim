@@ -877,8 +877,10 @@ bool ConnectionMatrix::load(istream& file){
                                         f->switch_type = FatTreeSwitch::AGG;
                                 else if (tokens[i]=="CORE")
                                         f->switch_type = FatTreeSwitch::CORE;
+                                else if (tokens[i]=="WAN")
+                                        f->switch_type = FatTreeSwitch::WAN;
                                 else {
-                                        cout << "Unknown switch type " << tokens[i] << ", expecting one of TOR, AGG or CORE "<<endl;
+                                        cout << "Unknown switch type " << tokens[i] << ", expecting one of TOR, AGG, CORE or WAN "<<endl;
                                         exit(1);
                                 }
                         } else if (tokens[i] == "switch_id") {
