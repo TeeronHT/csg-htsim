@@ -176,6 +176,12 @@ public:
     
     //uint32_t getK() const {return K;}
     uint32_t getNAGG() const {return NAGG;}
+    
+    // For multi-datacenter support
+    void set_host_offset(int offset);
+    uint32_t adjusted_host(uint32_t global_host_id) const;
+    uint32_t _host_id_offset;
+    
 private:
     map<Queue*,int> _link_usage;
     static FatTreeTopology* load(istream& file, QueueLoggerFactory* logger_factory, EventList& eventlist,

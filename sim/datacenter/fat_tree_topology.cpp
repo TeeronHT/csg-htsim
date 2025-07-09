@@ -244,6 +244,16 @@ FatTreeTopology* FatTreeTopology::load(istream& file, QueueLoggerFactory* logger
     return ft;
 }
 
+
+void FatTreeTopology::set_host_offset(int offset) {
+    _host_id_offset = offset;
+}
+
+uint32_t FatTreeTopology::adjusted_host(uint32_t global_host_id) const {
+    return global_host_id - _host_id_offset;
+}
+
+
 FatTreeTopology::FatTreeTopology(uint32_t no_of_nodes, linkspeed_bps linkspeed, mem_b queuesize,
                                  QueueLoggerFactory* logger_factory,
                                  EventList* ev,FirstFit * fit,queue_type q, simtime_picosec latency, simtime_picosec switch_latency, queue_type snd){
