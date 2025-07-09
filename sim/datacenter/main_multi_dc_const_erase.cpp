@@ -68,7 +68,7 @@ int main(int argc, char **argv) {
     uint32_t num_datacenters = 2;
     uint32_t nodes_per_dc = no_of_nodes / 2;
     linkspeed_bps wan_speed = speedFromGbps(1); // 1 Gbps WAN links
-    mem_b wan_queue_size = memFromPkt(5000);
+    mem_b wan_queue_size; // Will be initialized after packet size is set
     simtime_picosec wan_delay = timeFromMs(20); // 20ms WAN latency
 
     int i = 1;
@@ -199,6 +199,9 @@ int main(int argc, char **argv) {
     Packet::set_packet_size(packet_size);
     eventlist.setEndtime(endtime);
 
+    // Initialize WAN queue size after packet size is set
+    wan_queue_size = memFromPkt(5000);
+    
     queuesize = queuesize*Packet::data_packet_size();
     srand(time(NULL));
     srandom(time(NULL));
@@ -346,6 +349,12 @@ int main(int argc, char **argv) {
             routeout = new Route();
             routein = new Route();
         } else {
+            // Check if we have valid paths
+            if (!net_paths[src][dest] || net_paths[src][dest]->empty()) {
+                cout << "No valid path found from " << src << " to " << dest << endl;
+                continue; // Skip this connection
+            }
+            
             uint32_t choice = 0;
             choice = rand()%net_paths[src][dest]->size();
             
@@ -361,11 +370,31 @@ int main(int argc, char **argv) {
             }
 #endif
           
+            cout << "Creating forward route from " << src << " to " << dest << endl;
+            cout << "Route has " << net_paths[src][dest]->at(choice)->size() << " elements" << endl;
             routeout = new Route(*(net_paths[src][dest]->at(choice)));
-            routein = new Route(*top->get_bidir_paths(dest,src,false)->at(choice));
+            cout << "Forward route created with " << routeout->size() << " hops" << endl;
+            if (routeout->size() > 0) {
+                cout << "First element type: " << typeid(*routeout->at(0)).name() << endl;
+            }
+            
+            // Also check the reverse path
+            vector<const Route*>* reverse_paths = top->get_bidir_paths(dest,src,false);
+            if (!reverse_paths || reverse_paths->empty()) {
+                cout << "No valid reverse path found from " << dest << " to " << src << endl;
+                continue; // Skip this connection
+            }
+            cout << "Creating reverse route from " << dest << " to " << src << endl;
+            routein = new Route(*(reverse_paths->at(choice)));
+            cout << "Reverse route created with " << routein->size() << " hops" << endl;
+            if (routein->size() > 0) {
+                cout << "Reverse first element type: " << typeid(*routein->at(0)).name() << endl;
+            }
         }
 
+        cout << "About to connect sender " << src << " to sink " << dest << endl;
         sender->connect(*sink, (uint32_t)crt->start + rand()%(interpacket_delay), dest, *routeout, *routein);
+        cout << "Successfully connected sender " << src << " to sink " << dest << endl;
 
         if (route_strategy != SOURCE_ROUTE) {
             top->add_host_port(src, sender->flow().flow_id(), sender);

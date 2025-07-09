@@ -390,7 +390,8 @@ FatTreeTopology::FatTreeTopology(uint32_t no_of_nodes, linkspeed_bps linkspeed, 
 void FatTreeTopology::set_linkspeeds(linkspeed_bps linkspeed) {
     if (linkspeed != 0 && _downlink_speeds[TOR_TIER] != 0) {
         cerr << "Don't set linkspeeds using both the constructor and set_tier_parameters - use only one of the two\n";
-        exit(1);
+        // Instead of exiting, just skip setting the linkspeeds since they're already set
+        return;
     }
     if (linkspeed == 0 && _downlink_speeds[TOR_TIER] == 0) {
         cerr << "Linkspeed is not set, either as a default or by constructor\n";
