@@ -135,6 +135,10 @@ public:
     // WAN routing logic
     bool should_route_to_wan(uint32_t dest_host) const;
     uint32_t get_wan_dest_dc(uint32_t dest_host) const;
+    bool is_inter_dc_traffic(uint32_t dest_host) const;
+    
+    // Public method to add routes to FIB (for WAN switches)
+    void add_wan_route(uint32_t dest_host, Route* route);
 
     static routing_strategy _strategy;
     static uint16_t _ar_fraction;

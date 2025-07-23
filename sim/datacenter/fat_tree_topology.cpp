@@ -253,6 +253,36 @@ uint32_t FatTreeTopology::adjusted_host(uint32_t global_host_id) const {
     return global_host_id - _host_id_offset;
 }
 
+void FatTreeTopology::set_multi_dc_info(uint32_t dc_id, uint32_t total_dcs, uint32_t nodes_per_dc) {
+    // Set multi-DC information for all switches in this topology
+    for (size_t i = 0; i < switches_lp.size(); i++) {
+        FatTreeSwitch* sw = (FatTreeSwitch*)switches_lp[i];
+        sw->set_dc_id(dc_id);
+        sw->set_total_dcs(total_dcs);
+        sw->set_nodes_per_dc(nodes_per_dc);
+    }
+    
+    for (size_t i = 0; i < switches_up.size(); i++) {
+        FatTreeSwitch* sw = (FatTreeSwitch*)switches_up[i];
+        sw->set_dc_id(dc_id);
+        sw->set_total_dcs(total_dcs);
+        sw->set_nodes_per_dc(nodes_per_dc);
+    }
+    
+    for (size_t i = 0; i < switches_c.size(); i++) {
+        FatTreeSwitch* sw = (FatTreeSwitch*)switches_c[i];
+        sw->set_dc_id(dc_id);
+        sw->set_total_dcs(total_dcs);
+        sw->set_nodes_per_dc(nodes_per_dc);
+    }
+}
+
+void FatTreeTopology::connect_wan_switch(Switch* wan_switch) {
+    // Store the WAN switch reference for use by CORE switches
+    _wan_switch = wan_switch;
+    std::cout << "Connected WAN switch to FatTree topology" << std::endl;
+}
+
 
 FatTreeTopology::FatTreeTopology(uint32_t no_of_nodes, linkspeed_bps linkspeed, mem_b queuesize,
                                  QueueLoggerFactory* logger_factory,
@@ -1054,22 +1084,40 @@ void FatTreeTopology::add_failed_link(uint32_t type, uint32_t switch_id, uint32_
 }
 
 Route* FatTreeTopology::get_tor_route(uint32_t hostnum) {
+    uint32_t local_hostnum = adjusted_host(hostnum);
     Route* torroute = new Route();
-    torroute->push_back(queues_ns_nlp[hostnum][HOST_POD_SWITCH(hostnum)][0]);
-    torroute->push_back(pipes_ns_nlp[hostnum][HOST_POD_SWITCH(hostnum)][0]);
-    torroute->push_back(queues_ns_nlp[hostnum][HOST_POD_SWITCH(hostnum)][0]->getRemoteEndpoint());
+    torroute->push_back(queues_ns_nlp[local_hostnum][HOST_POD_SWITCH(local_hostnum)][0]);
+    torroute->push_back(pipes_ns_nlp[local_hostnum][HOST_POD_SWITCH(local_hostnum)][0]);
+    torroute->push_back(queues_ns_nlp[local_hostnum][HOST_POD_SWITCH(local_hostnum)][0]->getRemoteEndpoint());
     return torroute;
 }
 
 void FatTreeTopology::add_host_port(uint32_t hostnum, flowid_t flow_id, PacketSink* host) {
-    assert(switches_lp[HOST_POD_SWITCH(hostnum)]);
-    switches_lp[HOST_POD_SWITCH(hostnum)]->addHostPort(hostnum,flow_id,host);
+    uint32_t local_hostnum = adjusted_host(hostnum);
+    assert(switches_lp[HOST_POD_SWITCH(local_hostnum)]);
+    switches_lp[HOST_POD_SWITCH(local_hostnum)]->addHostPort(hostnum,flow_id,host);
 }
 
 vector<const Route*>* FatTreeTopology::get_bidir_paths(uint32_t src, uint32_t dest, bool reverse){
     vector<const Route*>* paths = new vector<const Route*>();
 
     route_t *routeout, *routeback;
+    
+    // Convert global host IDs to local host IDs if host offset is set
+    uint32_t local_src = adjusted_host(src);
+    uint32_t local_dest = adjusted_host(dest);
+    
+    std::cout << "  FatTree: global src=" << src << " dest=" << dest 
+              << " local src=" << local_src << " dest=" << local_dest 
+              << " max_nodes=" << _no_of_nodes << " host_offset=" << _host_id_offset << std::endl;
+    
+    // Validate that the hosts are within the local datacenter
+    if (local_src >= _no_of_nodes || local_dest >= _no_of_nodes) {
+        std::cerr << "ERROR: Host IDs out of range. src=" << src << " (local=" << local_src 
+                  << "), dest=" << dest << " (local=" << local_dest 
+                  << "), max=" << _no_of_nodes << std::endl;
+        return paths;
+    }
   
     //QueueLoggerSimple *simplequeuelogger = new QueueLoggerSimple();
     //QueueLoggerSimple *simplequeuelogger = 0;
@@ -1077,31 +1125,31 @@ vector<const Route*>* FatTreeTopology::get_bidir_paths(uint32_t src, uint32_t de
     //Queue* pqueue = new Queue(_linkspeed, memFromPkt(FEEDER_BUFFER), *_eventlist, simplequeuelogger);
     //pqueue->setName("PQueue_" + ntoa(src) + "_" + ntoa(dest));
     //logfile->writeName(*pqueue);
-    if (HOST_POD_SWITCH(src)==HOST_POD_SWITCH(dest)){
+    if (HOST_POD_SWITCH(local_src)==HOST_POD_SWITCH(local_dest)){
   
         // forward path
         routeout = new Route();
         //routeout->push_back(pqueue);
-        routeout->push_back(queues_ns_nlp[src][HOST_POD_SWITCH(src)][0]);
-        routeout->push_back(pipes_ns_nlp[src][HOST_POD_SWITCH(src)][0]);
+        routeout->push_back(queues_ns_nlp[local_src][HOST_POD_SWITCH(local_src)][0]);
+        routeout->push_back(pipes_ns_nlp[local_src][HOST_POD_SWITCH(local_src)][0]);
 
         if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-            routeout->push_back(queues_ns_nlp[src][HOST_POD_SWITCH(src)][0]->getRemoteEndpoint());
+            routeout->push_back(queues_ns_nlp[local_src][HOST_POD_SWITCH(local_src)][0]->getRemoteEndpoint());
 
-        routeout->push_back(queues_nlp_ns[HOST_POD_SWITCH(dest)][dest][0]);
-        routeout->push_back(pipes_nlp_ns[HOST_POD_SWITCH(dest)][dest][0]);
+        routeout->push_back(queues_nlp_ns[HOST_POD_SWITCH(local_dest)][local_dest][0]);
+        routeout->push_back(pipes_nlp_ns[HOST_POD_SWITCH(local_dest)][local_dest][0]);
 
         if (reverse) {
             // reverse path for RTS packets
             routeback = new Route();
-            routeback->push_back(queues_ns_nlp[dest][HOST_POD_SWITCH(dest)][0]);
-            routeback->push_back(pipes_ns_nlp[dest][HOST_POD_SWITCH(dest)][0]);
+            routeback->push_back(queues_ns_nlp[local_dest][HOST_POD_SWITCH(local_dest)][0]);
+            routeback->push_back(pipes_ns_nlp[local_dest][HOST_POD_SWITCH(local_dest)][0]);
 
             if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                routeback->push_back(queues_ns_nlp[dest][HOST_POD_SWITCH(dest)][0]->getRemoteEndpoint());
+                routeback->push_back(queues_ns_nlp[local_dest][HOST_POD_SWITCH(local_dest)][0]->getRemoteEndpoint());
 
-            routeback->push_back(queues_nlp_ns[HOST_POD_SWITCH(src)][src][0]);
-            routeback->push_back(pipes_nlp_ns[HOST_POD_SWITCH(src)][src][0]);
+            routeback->push_back(queues_nlp_ns[HOST_POD_SWITCH(local_src)][local_src][0]);
+            routeback->push_back(pipes_nlp_ns[HOST_POD_SWITCH(local_src)][local_src][0]);
 
             routeout->set_reverse(routeback);
             routeback->set_reverse(routeout);
@@ -1114,10 +1162,10 @@ vector<const Route*>* FatTreeTopology::get_bidir_paths(uint32_t src, uint32_t de
         //cout << "pathcount " << paths->size() << endl;
         return paths;
     }
-    else if (HOST_POD(src)==HOST_POD(dest)){
+    else if (HOST_POD(local_src)==HOST_POD(local_dest)){
         //don't go up the hierarchy, stay in the pod only.
 
-        uint32_t pod = HOST_POD(src);
+        uint32_t pod = HOST_POD(local_src);
         //there are K/2 paths between the source and the destination  <- this is no longer true for bundles
         if (_tiers == 2) {
             // xxx sanity check for debugging, remove later.
@@ -1134,51 +1182,51 @@ vector<const Route*>* FatTreeTopology::get_bidir_paths(uint32_t src, uint32_t de
       
                     routeout = new Route();
       
-                    routeout->push_back(queues_ns_nlp[src][HOST_POD_SWITCH(src)][0]);
-                    routeout->push_back(pipes_ns_nlp[src][HOST_POD_SWITCH(src)][0]);
+                    routeout->push_back(queues_ns_nlp[local_src][HOST_POD_SWITCH(local_src)][0]);
+                    routeout->push_back(pipes_ns_nlp[local_src][HOST_POD_SWITCH(local_src)][0]);
 
                     if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                        routeout->push_back(queues_ns_nlp[src][HOST_POD_SWITCH(src)][0]->getRemoteEndpoint());
+                        routeout->push_back(queues_ns_nlp[local_src][HOST_POD_SWITCH(local_src)][0]->getRemoteEndpoint());
 
-                    routeout->push_back(queues_nlp_nup[HOST_POD_SWITCH(src)][upper][b_up]);
-                    routeout->push_back(pipes_nlp_nup[HOST_POD_SWITCH(src)][upper][b_up]);
-
-                    if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                        routeout->push_back(queues_nlp_nup[HOST_POD_SWITCH(src)][upper][b_up]->getRemoteEndpoint());
-
-                    routeout->push_back(queues_nup_nlp[upper][HOST_POD_SWITCH(dest)][b_down]);
-                    routeout->push_back(pipes_nup_nlp[upper][HOST_POD_SWITCH(dest)][b_down]);
+                    routeout->push_back(queues_nlp_nup[HOST_POD_SWITCH(local_src)][upper][b_up]);
+                    routeout->push_back(pipes_nlp_nup[HOST_POD_SWITCH(local_src)][upper][b_up]);
 
                     if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                        routeout->push_back(queues_nup_nlp[upper][HOST_POD_SWITCH(dest)][b_down]->getRemoteEndpoint());
+                        routeout->push_back(queues_nlp_nup[HOST_POD_SWITCH(local_src)][upper][b_up]->getRemoteEndpoint());
 
-                    routeout->push_back(queues_nlp_ns[HOST_POD_SWITCH(dest)][dest][0]);
-                    routeout->push_back(pipes_nlp_ns[HOST_POD_SWITCH(dest)][dest][0]);
+                    routeout->push_back(queues_nup_nlp[upper][HOST_POD_SWITCH(local_dest)][b_down]);
+                    routeout->push_back(pipes_nup_nlp[upper][HOST_POD_SWITCH(local_dest)][b_down]);
+
+                    if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
+                        routeout->push_back(queues_nup_nlp[upper][HOST_POD_SWITCH(local_dest)][b_down]->getRemoteEndpoint());
+
+                    routeout->push_back(queues_nlp_ns[HOST_POD_SWITCH(local_dest)][local_dest][0]);
+                    routeout->push_back(pipes_nlp_ns[HOST_POD_SWITCH(local_dest)][local_dest][0]);
 
                     if (reverse) {
                         // reverse path for RTS packets
                         routeback = new Route();
       
-                        routeback->push_back(queues_ns_nlp[dest][HOST_POD_SWITCH(dest)][0]);
-                        routeback->push_back(pipes_ns_nlp[dest][HOST_POD_SWITCH(dest)][0]);
+                        routeback->push_back(queues_ns_nlp[local_dest][HOST_POD_SWITCH(local_dest)][0]);
+                        routeback->push_back(pipes_ns_nlp[local_dest][HOST_POD_SWITCH(local_dest)][0]);
 
                         if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                            routeback->push_back(queues_ns_nlp[dest][HOST_POD_SWITCH(dest)][0]->getRemoteEndpoint());
+                            routeback->push_back(queues_ns_nlp[local_dest][HOST_POD_SWITCH(local_dest)][0]->getRemoteEndpoint());
 
-                        routeback->push_back(queues_nlp_nup[HOST_POD_SWITCH(dest)][upper][b_down]);
-                        routeback->push_back(pipes_nlp_nup[HOST_POD_SWITCH(dest)][upper][b_down]);
-
-                        if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                            routeback->push_back(queues_nlp_nup[HOST_POD_SWITCH(dest)][upper][b_down]->getRemoteEndpoint());
-
-                        routeback->push_back(queues_nup_nlp[upper][HOST_POD_SWITCH(src)][b_up]);
-                        routeback->push_back(pipes_nup_nlp[upper][HOST_POD_SWITCH(src)][b_up]);
+                        routeback->push_back(queues_nlp_nup[HOST_POD_SWITCH(local_dest)][upper][b_down]);
+                        routeback->push_back(pipes_nlp_nup[HOST_POD_SWITCH(local_dest)][upper][b_down]);
 
                         if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                            routeback->push_back(queues_nup_nlp[upper][HOST_POD_SWITCH(src)][b_up]->getRemoteEndpoint());
+                            routeback->push_back(queues_nlp_nup[HOST_POD_SWITCH(local_dest)][upper][b_down]->getRemoteEndpoint());
+
+                        routeback->push_back(queues_nup_nlp[upper][HOST_POD_SWITCH(local_src)][b_up]);
+                        routeback->push_back(pipes_nup_nlp[upper][HOST_POD_SWITCH(local_src)][b_up]);
+
+                        if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
+                            routeback->push_back(queues_nup_nlp[upper][HOST_POD_SWITCH(local_src)][b_up]->getRemoteEndpoint());
       
-                        routeback->push_back(queues_nlp_ns[HOST_POD_SWITCH(src)][src][0]);
-                        routeback->push_back(pipes_nlp_ns[HOST_POD_SWITCH(src)][src][0]);
+                        routeback->push_back(queues_nlp_ns[HOST_POD_SWITCH(local_src)][local_src][0]);
+                        routeback->push_back(pipes_nlp_ns[HOST_POD_SWITCH(local_src)][local_src][0]);
 
                         routeout->set_reverse(routeback);
                         routeback->set_reverse(routeout);
@@ -1194,7 +1242,7 @@ vector<const Route*>* FatTreeTopology::get_bidir_paths(uint32_t src, uint32_t de
         return paths;
     } else {
         assert(_tiers == 3);
-        uint32_t pod = HOST_POD(src);
+        uint32_t pod = HOST_POD(local_src);
 
         for (uint32_t upper = MIN_POD_AGG_SWITCH(pod); upper <= MAX_POD_AGG_SWITCH(pod); upper++) {
             uint32_t podpos = upper % _agg_switches_per_pod;
@@ -1215,17 +1263,17 @@ vector<const Route*>* FatTreeTopology::get_bidir_paths(uint32_t src, uint32_t de
                                 routeout = new Route();
                                 //routeout->push_back(pqueue);
         
-                                routeout->push_back(queues_ns_nlp[src][HOST_POD_SWITCH(src)][0]);
-                                routeout->push_back(pipes_ns_nlp[src][HOST_POD_SWITCH(src)][0]);
+                                routeout->push_back(queues_ns_nlp[local_src][HOST_POD_SWITCH(local_src)][0]);
+                                routeout->push_back(pipes_ns_nlp[local_src][HOST_POD_SWITCH(local_src)][0]);
 
                                 if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                                    routeout->push_back(queues_ns_nlp[src][HOST_POD_SWITCH(src)][0]->getRemoteEndpoint());
+                                    routeout->push_back(queues_ns_nlp[local_src][HOST_POD_SWITCH(local_src)][0]->getRemoteEndpoint());
         
-                                routeout->push_back(queues_nlp_nup[HOST_POD_SWITCH(src)][upper][b1_up]);
-                                routeout->push_back(pipes_nlp_nup[HOST_POD_SWITCH(src)][upper][b1_up]);
+                                routeout->push_back(queues_nlp_nup[HOST_POD_SWITCH(local_src)][upper][b1_up]);
+                                routeout->push_back(pipes_nlp_nup[HOST_POD_SWITCH(local_src)][upper][b1_up]);
 
                                 if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                                    routeout->push_back(queues_nlp_nup[HOST_POD_SWITCH(src)][upper][b1_up]->getRemoteEndpoint());
+                                    routeout->push_back(queues_nlp_nup[HOST_POD_SWITCH(local_src)][upper][b1_up]->getRemoteEndpoint());
         
                                 routeout->push_back(queues_nup_nc[upper][core][b2_up]);
                                 routeout->push_back(pipes_nup_nc[upper][core][b2_up]);
@@ -1235,8 +1283,8 @@ vector<const Route*>* FatTreeTopology::get_bidir_paths(uint32_t src, uint32_t de
         
                                 //now take the only link down to the destination server!
         
-                                uint32_t upper2 = MIN_POD_AGG_SWITCH(HOST_POD(dest)) + core % _agg_switches_per_pod;
-                                //printf("K %d HOST_POD(%d) %d core %d upper2 %d\n",K,dest,HOST_POD(dest),core, upper2);
+                                uint32_t upper2 = MIN_POD_AGG_SWITCH(HOST_POD(local_dest)) + core % _agg_switches_per_pod;
+                                //printf("K %d HOST_POD(%d) %d core %d upper2 %d\n",K,local_dest,HOST_POD(local_dest),core, upper2);
         
                                 routeout->push_back(queues_nc_nup[core][upper2][b2_down]);
                                 routeout->push_back(pipes_nc_nup[core][upper2][b2_down]);
@@ -1244,30 +1292,30 @@ vector<const Route*>* FatTreeTopology::get_bidir_paths(uint32_t src, uint32_t de
                                 if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
                                     routeout->push_back(queues_nc_nup[core][upper2][b2_down]->getRemoteEndpoint());        
 
-                                routeout->push_back(queues_nup_nlp[upper2][HOST_POD_SWITCH(dest)][b1_down]);
-                                routeout->push_back(pipes_nup_nlp[upper2][HOST_POD_SWITCH(dest)][b1_down]);
+                                routeout->push_back(queues_nup_nlp[upper2][HOST_POD_SWITCH(local_dest)][b1_down]);
+                                routeout->push_back(pipes_nup_nlp[upper2][HOST_POD_SWITCH(local_dest)][b1_down]);
 
                                 if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                                    routeout->push_back(queues_nup_nlp[upper2][HOST_POD_SWITCH(dest)][b1_down]->getRemoteEndpoint());
+                                    routeout->push_back(queues_nup_nlp[upper2][HOST_POD_SWITCH(local_dest)][b1_down]->getRemoteEndpoint());
         
-                                routeout->push_back(queues_nlp_ns[HOST_POD_SWITCH(dest)][dest][0]);
-                                routeout->push_back(pipes_nlp_ns[HOST_POD_SWITCH(dest)][dest][0]);
+                                routeout->push_back(queues_nlp_ns[HOST_POD_SWITCH(local_dest)][local_dest][0]);
+                                routeout->push_back(pipes_nlp_ns[HOST_POD_SWITCH(local_dest)][local_dest][0]);
 
                                 if (reverse) {
                                     // reverse path for RTS packets
                                     routeback = new Route();
         
-                                    routeback->push_back(queues_ns_nlp[dest][HOST_POD_SWITCH(dest)][0]);
-                                    routeback->push_back(pipes_ns_nlp[dest][HOST_POD_SWITCH(dest)][0]);
+                                    routeback->push_back(queues_ns_nlp[local_dest][HOST_POD_SWITCH(local_dest)][0]);
+                                    routeback->push_back(pipes_ns_nlp[local_dest][HOST_POD_SWITCH(local_dest)][0]);
 
                                     if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                                        routeback->push_back(queues_ns_nlp[dest][HOST_POD_SWITCH(dest)][0]->getRemoteEndpoint());
+                                        routeback->push_back(queues_ns_nlp[local_dest][HOST_POD_SWITCH(local_dest)][0]->getRemoteEndpoint());
         
-                                    routeback->push_back(queues_nlp_nup[HOST_POD_SWITCH(dest)][upper2][b1_down]);
-                                    routeback->push_back(pipes_nlp_nup[HOST_POD_SWITCH(dest)][upper2][b1_down]);
+                                    routeback->push_back(queues_nlp_nup[HOST_POD_SWITCH(local_dest)][upper2][b1_down]);
+                                    routeback->push_back(pipes_nlp_nup[HOST_POD_SWITCH(local_dest)][upper2][b1_down]);
 
                                     if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                                        routeback->push_back(queues_nlp_nup[HOST_POD_SWITCH(dest)][upper2][b1_down]->getRemoteEndpoint());
+                                        routeback->push_back(queues_nlp_nup[HOST_POD_SWITCH(local_dest)][upper2][b1_down]->getRemoteEndpoint());
         
                                     routeback->push_back(queues_nup_nc[upper2][core][b2_down]);
                                     routeback->push_back(pipes_nup_nc[upper2][core][b2_down]);
@@ -1283,14 +1331,14 @@ vector<const Route*>* FatTreeTopology::get_bidir_paths(uint32_t src, uint32_t de
                                     if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
                                         routeback->push_back(queues_nc_nup[core][upper][b2_up]->getRemoteEndpoint());
         
-                                    routeback->push_back(queues_nup_nlp[upper][HOST_POD_SWITCH(src)][b1_up]);
-                                    routeback->push_back(pipes_nup_nlp[upper][HOST_POD_SWITCH(src)][b1_up]);
+                                    routeback->push_back(queues_nup_nlp[upper][HOST_POD_SWITCH(local_src)][b1_up]);
+                                    routeback->push_back(pipes_nup_nlp[upper][HOST_POD_SWITCH(local_src)][b1_up]);
 
                                     if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                                        routeback->push_back(queues_nup_nlp[upper][HOST_POD_SWITCH(src)][b1_up]->getRemoteEndpoint());
+                                        routeback->push_back(queues_nup_nlp[upper][HOST_POD_SWITCH(local_src)][b1_up]->getRemoteEndpoint());
         
-                                    routeback->push_back(queues_nlp_ns[HOST_POD_SWITCH(src)][src][0]);
-                                    routeback->push_back(pipes_nlp_ns[HOST_POD_SWITCH(src)][src][0]);
+                                    routeback->push_back(queues_nlp_ns[HOST_POD_SWITCH(local_src)][local_src][0]);
+                                    routeback->push_back(pipes_nlp_ns[HOST_POD_SWITCH(local_src)][local_src][0]);
 
 
                                     routeout->set_reverse(routeback);

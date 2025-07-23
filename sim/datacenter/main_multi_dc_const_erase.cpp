@@ -344,10 +344,30 @@ int main(int argc, char **argv) {
 
           
         if (route_strategy != SOURCE_ROUTE) {
-            // For multi-DC, we need to handle routing differently
-            // This is a simplified approach - in practice you'd want more sophisticated routing
-            routeout = new Route();
-            routein = new Route();
+            // For non-source routing, we still need to create routes for the connect call
+            // Get the paths and use them to create routes
+            if (!net_paths[src][dest] || net_paths[src][dest]->empty()) {
+                cout << "No valid path found from " << src << " to " << dest << endl;
+                continue; // Skip this connection
+            }
+            
+            uint32_t choice = 0;
+            choice = rand()%net_paths[src][dest]->size();
+            
+            if (choice>=net_paths[src][dest]->size()){
+                printf("Weird path choice %d out of %lu\n",choice,net_paths[src][dest]->size());
+                exit(1);
+            }
+            
+            routeout = new Route(*(net_paths[src][dest]->at(choice)));
+            
+            // Also check the reverse path
+            vector<const Route*>* reverse_paths = top->get_bidir_paths(dest,src,false);
+            if (!reverse_paths || reverse_paths->empty()) {
+                cout << "No valid reverse path found from " << dest << " to " << src << endl;
+                continue; // Skip this connection
+            }
+            routein = new Route(*(reverse_paths->at(choice)));
         } else {
             // Check if we have valid paths
             if (!net_paths[src][dest] || net_paths[src][dest]->empty()) {
@@ -393,8 +413,18 @@ int main(int argc, char **argv) {
         }
 
         cout << "About to connect sender " << src << " to sink " << dest << endl;
-        sender->connect(*sink, (uint32_t)crt->start + rand()%(interpacket_delay), dest, *routeout, *routein);
-        cout << "Successfully connected sender " << src << " to sink " << dest << endl;
+        try {
+            sender->connect(*sink, (uint32_t)crt->start + rand()%(interpacket_delay), dest, *routeout, *routein);
+            cout << "Successfully connected sender " << src << " to sink " << dest << endl;
+        } catch (const std::exception& e) {
+            cout << "Exception during connection setup: " << e.what() << endl;
+            cout << "Failed to connect sender " << src << " to sink " << dest << endl;
+            throw;
+        } catch (...) {
+            cout << "Unknown exception during connection setup" << endl;
+            cout << "Failed to connect sender " << src << " to sink " << dest << endl;
+            throw;
+        }
 
         if (route_strategy != SOURCE_ROUTE) {
             top->add_host_port(src, sender->flow().flow_id(), sender);
@@ -403,6 +433,7 @@ int main(int argc, char **argv) {
     }
     
     cout << "Loaded " << connID << " connections in total\n";
+    cout << "***** All connections complete, entering cleanup/statistics *****" << endl;
     cout << "Inter-DC flows: " << endl;
     for (uint32_t c = 0; c < all_conns->size(); c++){
         connection* crt = all_conns->at(c);
@@ -415,26 +446,41 @@ int main(int argc, char **argv) {
     // GO!
     cout << "Starting simulation" << endl;
     simtime_picosec checkpoint = timeFromUs(100.0);
-    while (eventlist.doNextEvent()) {
-        if (eventlist.now() > checkpoint) {
-            cout << "Simulation time " << timeAsUs(eventlist.now()) << endl;
-            checkpoint += timeFromUs(100.0);
-            if (endtime == 0) {
-                // Iterate through sinks to see if they have completed the flows
-                bool all_done = true;
-                list <ConstantErasureCcaSink*>::iterator sink_i;
-                for (sink_i = sinks.begin(); sink_i != sinks.end(); sink_i++) {
-                    if ((*sink_i)->_src->_completion_time == 0) {
-                        all_done = false;
+    int event_count = 0;
+    try {
+        while (eventlist.doNextEvent()) {
+            event_count++;
+            if (event_count % 10000 == 0) {
+                cout << "Processed " << event_count << " events, current time: " << timeAsUs(eventlist.now()) << endl;
+            }
+            if (eventlist.now() > checkpoint) {
+                cout << "Simulation time " << timeAsUs(eventlist.now()) << " (processed " << event_count << " events)" << endl;
+                checkpoint += timeFromUs(100.0);
+                if (endtime == 0) {
+                    // Iterate through sinks to see if they have completed the flows
+                    bool all_done = true;
+                    list <ConstantErasureCcaSink*>::iterator sink_i;
+                    for (sink_i = sinks.begin(); sink_i != sinks.end(); sink_i++) {
+                        if ((*sink_i)->_src->_completion_time == 0) {
+                            all_done = false;
+                            break;
+                        }
+                    }
+                    if (all_done) {
+                        cout << "All flows completed" << endl;
                         break;
                     }
                 }
-                if (all_done) {
-                    cout << "All flows completed" << endl;
-                    break;
-                }
             }
         }
+    } catch (const std::exception& e) {
+        cout << "Exception caught during simulation: " << e.what() << endl;
+        cout << "Event count: " << event_count << ", Time: " << timeAsUs(eventlist.now()) << endl;
+        throw;
+    } catch (...) {
+        cout << "Unknown exception caught during simulation" << endl;
+        cout << "Event count: " << event_count << ", Time: " << timeAsUs(eventlist.now()) << endl;
+        throw;
     }
 
     cout << "Done" << endl;
@@ -460,6 +506,8 @@ int main(int argc, char **argv) {
         }
     }
     
+    cout << "About to delete top" << endl;
     delete top;
+    cout << "Deleted top" << endl;
     return 0;
 } 

@@ -180,9 +180,15 @@ public:
     // For multi-datacenter support
     void set_host_offset(int offset);
     uint32_t adjusted_host(uint32_t global_host_id) const;
+    
+    // Multi-DC support
+    void set_multi_dc_info(uint32_t dc_id, uint32_t total_dcs, uint32_t nodes_per_dc);
+    void connect_wan_switch(Switch* wan_switch);
+    Switch* get_wan_switch() const { return _wan_switch; }
     uint32_t _host_id_offset;
     
 private:
+    Switch* _wan_switch; // Reference to WAN switch for inter-DC routing
     map<Queue*,int> _link_usage;
     static FatTreeTopology* load(istream& file, QueueLoggerFactory* logger_factory, EventList& eventlist,
                                  mem_b queuesize, queue_type q_type, queue_type sender_q_type);

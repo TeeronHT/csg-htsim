@@ -24,12 +24,19 @@ MultiDatacenterTopology::MultiDatacenterTopology(uint32_t num_datacenters, uint3
 }
 
 MultiDatacenterTopology::~MultiDatacenterTopology() {
-    for (auto dc : _datacenters) {
-        delete dc;
+    std::cout << "  [Destructor] Deleting datacenters..." << std::endl;
+    for (size_t i = 0; i < _datacenters.size(); ++i) {
+        std::cout << "    Deleting datacenter " << i << std::endl;
+        delete _datacenters[i];
+        std::cout << "    Deleted datacenter " << i << std::endl;
     }
-    for (auto ws : _wan_switches) {
-        delete ws;
+    std::cout << "  [Destructor] Deleting WAN switches..." << std::endl;
+    for (size_t i = 0; i < _wan_switches.size(); ++i) {
+        std::cout << "    Deleting WAN switch " << i << std::endl;
+        delete _wan_switches[i];
+        std::cout << "    Deleted WAN switch " << i << std::endl;
     }
+    std::cout << "  [Destructor] Done." << std::endl;
 }
 
 void MultiDatacenterTopology::init_datacenters() {
@@ -52,20 +59,38 @@ void MultiDatacenterTopology::init_datacenters() {
         // Create individual fat tree topology for this datacenter
         std::cout << "  Creating FatTreeTopology for DC " << dc_id << "..." << std::endl;
         _datacenters[dc_id] = new FatTreeTopology(_nodes_per_dc, _intra_dc_speed, _intra_dc_queue_size,
-                                                  _logger_factory, _eventlist, nullptr, _queue_type, CONST_SCHEDULER);
+                                                  _logger_factory, _eventlist, nullptr, _queue_type, 
+                                                  0, 0, CONST_SCHEDULER);
         std::cout << "  FatTreeTopology created for DC " << dc_id << std::endl;
+        
+        // Set host offset for this datacenter
+        uint32_t host_offset = dc_id * _nodes_per_dc;
+        _datacenters[dc_id]->set_host_offset(host_offset);
+        std::cout << "  Set host offset for DC " << dc_id << " to " << host_offset << std::endl;
+        
+        // Debug: Check the topology configuration
+        std::cout << "  DC " << dc_id << " has " << _datacenters[dc_id]->no_of_nodes() << " nodes" << std::endl;
         
         // Create WAN switch for this datacenter
         std::cout << "  Creating WAN switch for DC " << dc_id << "..." << std::endl;
         std::stringstream ss;
         ss << "WAN_Switch_DC" << dc_id;
+        // Pass nullptr as FatTree topology to decouple WAN switch from local routing
         _wan_switches[dc_id] = new FatTreeSwitch(*_eventlist, ss.str(), FatTreeSwitch::WAN, dc_id, 
-                                                 timeFromUs((uint32_t)1), _datacenters[dc_id]);
+                                                 timeFromUs((uint32_t)1), nullptr);
         
         // Configure WAN switch for multi-DC
         _wan_switches[dc_id]->set_dc_id(dc_id);
         _wan_switches[dc_id]->set_total_dcs(_num_datacenters);
         _wan_switches[dc_id]->set_nodes_per_dc(_nodes_per_dc);
+        
+        // Configure all switches in the FatTree topology for multi-DC
+        // This is needed so they can properly identify inter-DC traffic
+        _datacenters[dc_id]->set_multi_dc_info(dc_id, _num_datacenters, _nodes_per_dc);
+        
+        // Connect WAN switch to the FatTree topology
+        // This allows CORE switches to route inter-DC traffic to WAN switches
+        _datacenters[dc_id]->connect_wan_switch(_wan_switches[dc_id]);
         
         std::cout << "Created DC " << dc_id << " with " << _nodes_per_dc << " nodes" << std::endl;
     }
@@ -115,8 +140,14 @@ void MultiDatacenterTopology::setup_wan_routing() {
                     route->push_back(_wan_pipes[dc_id][dest_dc]);
                     route->push_back(_wan_switches[dest_dc]);
                     
-                    // Note: _fib is protected, we'll need to access it differently
-                    // For now, we'll skip this routing setup and handle it in the switch logic
+                    // Add the route to the WAN switch's FIB
+                    wan_switch->add_wan_route(global_host_id, route);
+                    std::cout << "Created WAN route from DC" << dc_id << " to host " << global_host_id << " in DC" << dest_dc << std::endl;
+                    
+                    // Verify the route was added
+                    if (host_in_dest_dc % 10 == 0) { // Only check every 10th route to avoid spam
+                        std::cout << "  Verified WAN route for host " << global_host_id << " has " << route->size() << " elements" << std::endl;
+                    }
                 }
             }
         }
@@ -133,13 +164,31 @@ vector<const Route*>* MultiDatacenterTopology::get_bidir_paths(uint32_t src, uin
     
     std::cout << "get_bidir_paths: src=" << src << " dest=" << dest 
               << " (DC" << src_dc << ":" << src_local << " -> DC" << dest_dc << ":" << dest_local << ")" << std::endl;
+    std::cout << "  DC" << src_dc << " has " << _datacenters[src_dc]->no_of_nodes() << " nodes" << std::endl;
     
     if (src_dc == dest_dc) {
         // Intra-DC routing - use the local fat tree topology
         std::cout << "  Intra-DC routing" << std::endl;
         std::cout << "  Local host IDs: src=" << src_local << " dest=" << dest_local << std::endl;
-        vector<const Route*>* local_paths = _datacenters[src_dc]->get_bidir_paths(src_local, dest_local, reverse);
+        
+        // Validate datacenter access
+        if (src_dc >= _datacenters.size()) {
+            std::cerr << "ERROR: Invalid datacenter ID " << src_dc << " (max: " << _datacenters.size() - 1 << ")" << std::endl;
+            return paths;
+        }
+        
+        if (!_datacenters[src_dc]) {
+            std::cerr << "ERROR: Datacenter " << src_dc << " is null" << std::endl;
+            return paths;
+        }
+        
+        vector<const Route*>* local_paths = _datacenters[src_dc]->get_bidir_paths(src, dest, reverse);
         std::cout << "  Got " << local_paths->size() << " paths" << std::endl;
+        
+        if (local_paths->empty()) {
+            std::cerr << "ERROR: No paths found from host " << src_local << " to " << dest_local << " in DC " << src_dc << std::endl;
+            std::cerr << "  Total nodes in DC: " << _datacenters[src_dc]->no_of_nodes() << std::endl;
+        }
         
         // Copy the paths from the local datacenter
         for (size_t i = 0; i < local_paths->size(); i++) {
@@ -147,13 +196,16 @@ vector<const Route*>* MultiDatacenterTopology::get_bidir_paths(uint32_t src, uin
         }
     } else {
         // Inter-DC routing - need to go through WAN
-        std::cout << "  Inter-DC routing" << std::endl;
-        Route* route = get_wan_route(src_dc, dest_dc, src, dest);
-        if (route) {
-            paths->push_back(route);
-            std::cout << "  Added WAN route" << std::endl;
+        std::cout << "  Inter-DC routing - using WAN" << std::endl;
+        
+        // Get the WAN route
+        Route* wan_route = get_wan_route(src_dc, dest_dc, src, dest);
+        if (wan_route) {
+            paths->push_back(wan_route);
+            std::cout << "  Created WAN route with " << wan_route->size() << " elements" << std::endl;
         } else {
-            std::cout << "  No WAN route found" << std::endl;
+            std::cerr << "  Failed to create WAN route from DC" << src_dc << " host " << src_local 
+                      << " to DC" << dest_dc << " host " << dest_local << std::endl;
         }
     }
     
@@ -167,69 +219,46 @@ Route* MultiDatacenterTopology::get_wan_route(uint32_t src_dc, uint32_t dest_dc,
         return _wan_routes_cache[key];
     }
     
+    // Ensure this is only called for inter-DC routing
+    if (src_dc == dest_dc) {
+        std::cerr << "ERROR: get_wan_route called for intra-DC routing (DC" << src_dc << " to DC" << dest_dc << ")" << std::endl;
+        return nullptr;
+    }
+    
     std::cout << "Building WAN route from DC" << src_dc << " host " << src_host 
               << " to DC" << dest_dc << " host " << dest_host << std::endl;
     
-    // Build the route: src_host -> local_tor -> local_agg -> local_core -> local_wan -> remote_wan -> remote_core -> remote_agg -> remote_tor -> dest_host
-    
-    // Get route from src_host to local WAN switch
-    uint32_t src_local = get_local_host_id(src_host);
-    std::cout << "Getting local path from host " << src_local << " to 0 in DC " << src_dc << std::endl;
-    vector<const Route*>* local_paths = _datacenters[src_dc]->get_bidir_paths(src_local, 0, false);
-    if (local_paths->empty()) {
-        std::cerr << "No local path found from host " << src_host << " in DC " << src_dc << std::endl;
+    // Validate that WAN connections exist
+    if (src_dc >= _wan_queues.size() || dest_dc >= _wan_queues[src_dc].size() || 
+        !_wan_queues[src_dc][dest_dc] || !_wan_pipes[src_dc][dest_dc] || !_wan_switches[dest_dc]) {
+        std::cerr << "ERROR: WAN connection not properly initialized for DC" << src_dc << " to DC" << dest_dc << std::endl;
         return nullptr;
     }
     
-    // Get route from remote WAN switch to dest_host
-    uint32_t dest_local = get_local_host_id(dest_host);
-    std::cout << "Getting remote path from host 0 to " << dest_local << " in DC " << dest_dc << std::endl;
-    vector<const Route*>* remote_paths = _datacenters[dest_dc]->get_bidir_paths(0, dest_local, false);
-    if (remote_paths->empty()) {
-        std::cerr << "No remote path found to host " << dest_host << " in DC " << dest_dc << std::endl;
-        return nullptr;
-    }
-    
-    // Build complete route
     Route* complete_route = new Route();
     
     // Add a scheduler at the beginning (required by ConstantErasureCcaSrc::connect)
     ConstFairScheduler* scheduler = new ConstFairScheduler(_intra_dc_speed, *_eventlist, nullptr);
     complete_route->push_back(scheduler);
     
-    // Add local path (excluding the final destination)
-    const Route* local_route = (*local_paths)[0];
-    if (local_route->size() > 1) {
-        for (size_t i = 0; i < local_route->size() - 1; i++) {
-            complete_route->push_back(local_route->at(i));
-        }
-    }
-    
-    // Add WAN connection
+    // Add WAN connection - only for inter-DC traffic
     complete_route->push_back(_wan_queues[src_dc][dest_dc]);
     complete_route->push_back(_wan_pipes[src_dc][dest_dc]);
     complete_route->push_back(_wan_switches[dest_dc]);
     
-    // Add remote path (excluding the initial source)
-    const Route* remote_route = (*remote_paths)[0];
-    if (remote_route->size() > 1) {
-        for (size_t i = 1; i < remote_route->size(); i++) {
-            complete_route->push_back(remote_route->at(i));
-        }
-    }
-    
     // Cache the route
     _wan_routes_cache[key] = complete_route;
+    
+    std::cout << "Created WAN route with " << complete_route->size() << " elements" << std::endl;
     
     return complete_route;
 }
 
 void MultiDatacenterTopology::add_host_port(uint32_t hostnum, flowid_t flow_id, PacketSink* host) {
     uint32_t dc_id = get_dc_id(hostnum);
-    uint32_t local_host_id = get_local_host_id(hostnum);
     
-    // Add to the appropriate datacenter
-    _datacenters[dc_id]->add_host_port(local_host_id, flow_id, host);
+    // Add to the appropriate datacenter using global host ID
+    _datacenters[dc_id]->add_host_port(hostnum, flow_id, host);
 }
 
 uint32_t MultiDatacenterTopology::get_dc_id(uint32_t host_id) const {
