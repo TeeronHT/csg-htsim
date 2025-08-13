@@ -5,6 +5,7 @@
 #include "callback_pipe.h"
 #include "queue_lossless.h"
 #include "queue_lossless_output.h"
+#include "constant_cca_packet.h"
 
 unordered_map<BaseQueue*,uint32_t> FatTreeSwitch::_port_flow_counts;
 
@@ -340,35 +341,79 @@ double FatTreeSwitch::_speculative_threshold_fraction = 0.2;
 int8_t (*FatTreeSwitch::fn)(FibEntry*,FibEntry*)= &FatTreeSwitch::compare_queuesize;
 
 Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
+
+    // Need to account for local vs global host IDs
+
     // Handle WAN switches that don't have a FatTree topology
     if (_type == WAN) {
         // WAN switch routing logic
         uint32_t dst = pkt.dst();
+        uint32_t src = pkt.src();
+
+        cerr << "Sequence number " << pkt.id();
         
-        // Check if destination is in a different DC
-        if (!should_route_to_wan(dst)) {
-            cerr << "WAN switch " << _id << " received packet for local DC host " << dst << " (should not happen)" << endl;
-            cerr << "  WAN switch DC ID: " << _dc_id << ", dest host DC: " << (dst / _nodes_per_dc) << endl;
-            cerr << "  This suggests routing tables are incorrectly configured" << endl;
-            cerr << "  For now, dropping packet to avoid crash" << endl;
-            // Just drop the packet by not calling any egress port
-            // This will cause the packet to be lost, but it's better than crashing
-            return nullptr;
+        cerr << "  WAN switch " << _id << " received packet: src=" << src << " dst=" << dst << " (from switch " << (ingress_port ? ingress_port->getSwitch()->getID() : -1) << ")" << endl;
+        // cerr << "  WAN switch " << _id << " is connected to FatTree topology with host offset: " << (_ft ? _ft->_host_id_offset : -1) << endl;
+        // cerr << "  WAN switch DC ID: " << _dc_id << ", dest host DC: " << (dst / _nodes_per_dc) << endl;
+        // cerr << "  _nodes_per_dc: " << _nodes_per_dc << ", dst/_nodes_per_dc: " << (dst / _nodes_per_dc) << endl;
+        // cerr << "  Is local host? " << ((dst / _nodes_per_dc == _dc_id) ? "YES" : "NO") << endl;
+        // cerr << "  Debug: dst=" << dst << ", _dc_id=" << _dc_id << ", dst/_nodes_per_dc=" << (dst / _nodes_per_dc) << ", comparison=" << (dst / _nodes_per_dc == _dc_id) << endl;
+        // cerr << "  Debug: WAN switch " << _id << " configuration: _dc_id=" << _dc_id << ", _nodes_per_dc=" << _nodes_per_dc << endl;
+        
+        // Case 1: Packet received from WAN link, need to send down to CORE router
+        // This happens when the destination is in this DC (_dc_id == (dst / _nodes_per_dc))
+        if (dst / _nodes_per_dc == _dc_id) {
+            // cerr << "WAN switch " << _id << " routing packet to local DC host " << dst << endl;
+            // cerr << "  WAN switch DC ID: " << _dc_id << ", dest host DC: " << (dst / _nodes_per_dc) << endl;
+            
+            // Get route to the destination through the local FatTree
+            vector<FibEntry*>* available_hops = _fib->getRoutes(dst);
+            if (!available_hops || available_hops->empty()) {
+                cerr << "  ERROR: WAN switch no route found for local host " << dst << endl;
+                // cerr << "  This should not happen - routes should be pre-populated" << endl;
+                // cerr << "  Debug: Looking for host " << dst << " in WAN switch " << _id << " FIB" << endl;
+                // cerr << "  Debug: WAN switch " << _id << " has DC ID " << _dc_id << " and nodes_per_dc " << _nodes_per_dc << endl;
+                // cerr << "  Debug: Expected local host range: " << (_dc_id * _nodes_per_dc) << " to " << ((_dc_id + 1) * _nodes_per_dc - 1) << endl;
+                return nullptr;
+            }
+            
+            cerr << "  SUCCESS: WAN switch " << _id << " found " << available_hops->size() << " routes for local host " << dst << endl;
+            
+            // ECMP path to destination host
+            uint32_t ecmp_choice = 0;
+            if (available_hops->size() > 1) {
+                ecmp_choice = freeBSDHash(pkt.flow_id(), pkt.pathid(), _hash_salt) % available_hops->size();
+            }
+            
+            FibEntry* e = (*available_hops)[ecmp_choice];
+            pkt.set_direction(DOWN);
+            return e->getEgressPort();
         }
         
-        // Get the destination DC
-        uint32_t dest_dc = get_wan_dest_dc(dst);
+        // Case 2: Packet needs to be sent over WAN link to different DC
+        // This happens when _dc_id != (dst / _nodes_per_dc)
+        uint32_t dest_dc = dst / _nodes_per_dc;
+        cerr << "WAN switch " << _id << " routing packet to remote DC host " << dst << " (DC" << dest_dc << ")" << endl;
+        cerr << "  WAN switch DC ID: " << _dc_id << ", dest host DC: " << dest_dc << endl;
         
         // Check FIB for cached WAN route
         vector<FibEntry*>* available_hops = _fib->getRoutes(dst);
         
         if (!available_hops || available_hops->empty()) {
-            // This should be populated by the topology setup
-            cerr << "WAN switch " << _id << " no route found for host " << dst << endl;
-            cerr << "  WAN switch DC ID: " << _dc_id << ", dest host DC: " << (dst / _nodes_per_dc) << endl;
-            cerr << "  For now, dropping packet to avoid crash" << endl;
-            return nullptr; // Drop packet instead of crashing
+            cerr << "  ERROR: WAN switch no route found for remote host " << dst << endl;
+            cerr << "  Available routes in FIB: " << _fib->getRoutes(dst) << endl;
+            return nullptr;
         }
+        
+        cerr << "  Found " << available_hops->size() << " routes for host " << dst << endl;
+        
+        // Debug: Check what the route leads to
+        // FibEntry* debug_e = (*available_hops)[0];
+        // Route* debug_route = debug_e->getEgressPort();
+        // cerr << "  DEBUG: WAN switch " << _id << " has route with " << (debug_route ? debug_route->size() : 0) << " elements" << endl;
+        // if (debug_route && debug_route->size() > 0) {
+        //     cerr << "  DEBUG: WAN switch " << _id << " first route element type: " << typeid(*debug_route->at(0)).name() << endl;
+        // }
         
         // ECMP path to destination host
         uint32_t ecmp_choice = 0;
@@ -469,67 +514,70 @@ Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
     //no route table entries for this destination. Add them to FIB or fail. 
     if (_type == TOR){
         cerr << "TOR switch " << _id << " routing packet to dest " << pkt.dst() << endl;
-        if ( _ft->HOST_POD_SWITCH(pkt.dst()) == _id) { 
+        
+        // Check if destination is directly connected using adjusted host ID
+        uint32_t adjusted_dst = _ft->adjusted_host(pkt.dst());
+        if ( _ft->HOST_POD_SWITCH(adjusted_dst) == _id) { 
             //this host is directly connected!
-            cerr << "  TOR switch " << _id << " dest is directly connected" << endl;
+            cerr << "  TOR switch " << _id << " dest is directly connected (adjusted host " << adjusted_dst << ")" << endl;
             HostFibEntry* fe = _fib->getHostRoute(pkt.dst(),pkt.flow_id());
             assert(fe);
             pkt.set_direction(DOWN);
             return fe->getEgressPort();
             
         } else {
-            cerr << "  TOR switch " << _id << " dest is not directly connected, checking if inter-DC" << endl;
-            // Check if this is inter-DC traffic before routing up
-            if (!is_inter_dc_traffic(pkt.dst())) {
-                cerr << "TOR switch " << _id << " refusing to route local traffic up to WAN" << endl;
-                cerr << "  Destination host " << pkt.dst() << " is in same DC" << endl;
-                cerr << "  TOR DC ID: " << _dc_id << ", dest DC: " << (pkt.dst() / _nodes_per_dc) << endl;
-                return nullptr; // This will cause the packet to be dropped
-            }
-            cerr << "  TOR switch " << _id << " routing inter-DC traffic up" << endl;
-            //route packet up!
-            if (_uproutes)
-                _fib->setRoutes(pkt.dst(),_uproutes);
-            else {
-                uint32_t podid,agg_min,agg_max;
-
-                if (_ft->get_tiers()==3) {
-                    podid = _id / _ft->tor_switches_per_pod();
-                    agg_min = _ft->MIN_POD_AGG_SWITCH(podid);
-                    agg_max = _ft->MAX_POD_AGG_SWITCH(podid);
-                }
+            cerr << "  TOR switch " << _id << " dest is not directly connected" << endl;
+            
+            // Check if this is inter-DC traffic
+            if (is_inter_dc_traffic(pkt.dst())) {
+                cerr << "  TOR switch " << _id << " routing inter-DC traffic up" << endl;
+                // Route inter-DC traffic up to AGG switches
+                if (_uproutes)
+                    _fib->setRoutes(pkt.dst(),_uproutes);
                 else {
-                    agg_min = 0;
-                    agg_max = _ft->getNAGG()-1;
-                }
+                    uint32_t podid,agg_min,agg_max;
 
-                for (uint32_t k=agg_min; k<=agg_max;k++){
-                    for (uint32_t b = 0; b < _ft->bundlesize(AGG_TIER); b++) {
-                        Route * r = new Route();
-                        r->push_back(_ft->queues_nlp_nup[_id][k][b]);
-                        assert(((BaseQueue*)r->at(0))->getSwitch() == this);
-
-                        r->push_back(_ft->pipes_nlp_nup[_id][k][b]);
-                        r->push_back(_ft->queues_nlp_nup[_id][k][b]->getRemoteEndpoint());
-                        _fib->addRoute(pkt.dst(),r,1,UP);
+                    if (_ft->get_tiers()==3) {
+                        podid = _id / _ft->tor_switches_per_pod();
+                        agg_min = _ft->MIN_POD_AGG_SWITCH(podid);
+                        agg_max = _ft->MAX_POD_AGG_SWITCH(podid);
+                    }
+                    else {
+                        agg_min = 0;
+                        agg_max = _ft->getNAGG()-1;
                     }
 
-                    /*
-                      FatTreeSwitch* next = (FatTreeSwitch*)_ft->queues_nlp_nup[_id][k]->getRemoteEndpoint();
-                      assert (next->getType()==AGG && next->getID() == k);
-                    */
+                    for (uint32_t k=agg_min; k<=agg_max;k++){
+                        for (uint32_t b = 0; b < _ft->bundlesize(AGG_TIER); b++) {
+                            Route * r = new Route();
+                            r->push_back(_ft->queues_nlp_nup[_id][k][b]);
+                            assert(((BaseQueue*)r->at(0))->getSwitch() == this);
+
+                            r->push_back(_ft->pipes_nlp_nup[_id][k][b]);
+                            r->push_back(_ft->queues_nlp_nup[_id][k][b]->getRemoteEndpoint());
+                            _fib->addRoute(pkt.dst(),r,1,UP);
+                        }
+                    }
+                    _uproutes = _fib->getRoutes(pkt.dst());
+                    permute_paths(_uproutes);
                 }
-                _uproutes = _fib->getRoutes(pkt.dst());
-                permute_paths(_uproutes);
+            } else {
+                cerr << "  TOR switch " << _id << " routing local traffic up (should not happen)" << endl;
+                cerr << "  Destination host " << pkt.dst() << " is in same DC but not directly connected" << endl;
+                cerr << "  TOR DC ID: " << _dc_id << ", dest DC: " << (pkt.dst() / _nodes_per_dc) << endl;
+                return nullptr; // This will cause the packet to be dropped
             }
         }
     } else if (_type == AGG) {
         cerr << "AGG switch " << _id << " routing packet to dest " << pkt.dst() << endl;
-        if ( _ft->get_tiers()==2 || _ft->HOST_POD(pkt.dst()) == _ft->AGG_SWITCH_POD_ID(_id)) {
+        
+        // Check if destination is in the same pod (local traffic)
+        uint32_t adjusted_dst = _ft->adjusted_host(pkt.dst());
+        if ( _ft->get_tiers()==2 || _ft->HOST_POD(adjusted_dst) == _ft->AGG_SWITCH_POD_ID(_id)) {
             //must go down!
             cerr << "  AGG switch " << _id << " routing down to local pod" << endl;
             //target NLP id is 2 * pkt.dst()/K
-            uint32_t target_tor = _ft->HOST_POD_SWITCH(pkt.dst());
+            uint32_t target_tor = _ft->HOST_POD_SWITCH(adjusted_dst);
             for (uint32_t b = 0; b < _ft->bundlesize(AGG_TIER); b++) {
                 Route * r = new Route();
                 r->push_back(_ft->queues_nup_nlp[_id][target_tor][b]);
@@ -542,51 +590,49 @@ Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
             }
         } else {
             cerr << "  AGG switch " << _id << " routing up to different pod" << endl;
-            // Check if this is inter-DC traffic before routing up
-            if (!is_inter_dc_traffic(pkt.dst())) {
-                cerr << "AGG switch " << _id << " refusing to route local traffic up to WAN" << endl;
-                cerr << "  Destination host " << pkt.dst() << " is in same DC" << endl;
+            
+            // Check if this is inter-DC traffic
+            if (is_inter_dc_traffic(pkt.dst())) {
+                cerr << "  AGG switch " << _id << " routing inter-DC traffic up to CORE" << endl;
+                // Route inter-DC traffic up to CORE switches
+                if (_uproutes)
+                    _fib->setRoutes(pkt.dst(),_uproutes);
+                else {
+                    uint32_t podpos = _id % _ft->agg_switches_per_pod();
+                    uint32_t uplink_bundles = _ft->radix_up(AGG_TIER) / _ft->bundlesize(CORE_TIER);
+                    for (uint32_t l = 0; l <  uplink_bundles ; l++) {
+                        uint32_t core = l * _ft->agg_switches_per_pod() + podpos;
+                        for (uint32_t b = 0; b < _ft->bundlesize(CORE_TIER); b++) {
+                            Route *r = new Route();
+                            r->push_back(_ft->queues_nup_nc[_id][core][b]);
+                            assert(((BaseQueue*)r->at(0))->getSwitch() == this);
+
+                            r->push_back(_ft->pipes_nup_nc[_id][core][b]);
+                            r->push_back(_ft->queues_nup_nc[_id][core][b]->getRemoteEndpoint());
+
+                            _fib->addRoute(pkt.dst(),r,1,UP);
+                        }
+                    }
+                    permute_paths(_fib->getRoutes(pkt.dst()));
+                }
+            } else {
+                cerr << "  AGG switch " << _id << " routing local traffic up (should not happen)" << endl;
+                cerr << "  Destination host " << pkt.dst() << " is in same DC but different pod" << endl;
                 cerr << "  AGG DC ID: " << _dc_id << ", dest DC: " << (pkt.dst() / _nodes_per_dc) << endl;
                 return nullptr; // This will cause the packet to be dropped
-            }
-            cerr << "  AGG switch " << _id << " routing inter-DC traffic up" << endl;
-            //go up!
-            if (_uproutes)
-                _fib->setRoutes(pkt.dst(),_uproutes);
-            else {
-                uint32_t podpos = _id % _ft->agg_switches_per_pod();
-                uint32_t uplink_bundles = _ft->radix_up(AGG_TIER) / _ft->bundlesize(CORE_TIER);
-                for (uint32_t l = 0; l <  uplink_bundles ; l++) {
-                    uint32_t core = l * _ft->agg_switches_per_pod() + podpos;
-                    for (uint32_t b = 0; b < _ft->bundlesize(CORE_TIER); b++) {
-                        Route *r = new Route();
-                        r->push_back(_ft->queues_nup_nc[_id][core][b]);
-                        assert(((BaseQueue*)r->at(0))->getSwitch() == this);
-
-                        r->push_back(_ft->pipes_nup_nc[_id][core][b]);
-                        r->push_back(_ft->queues_nup_nc[_id][core][b]->getRemoteEndpoint());
-
-                        /*
-                          FatTreeSwitch* next = (FatTreeSwitch*)_ft->queues_nup_nc[_id][k]->getRemoteEndpoint();
-                          assert (next->getType()==CORE && next->getID() == k);
-                        */
-                    
-                        _fib->addRoute(pkt.dst(),r,1,UP);
-
-                        //cout << "AGG switch " << _id << " adding route to " << pkt.dst() << " via CORE " << k << " bundle_id " << b << endl;
-                    }
-                }
-                //_uproutes = _fib->getRoutes(pkt.dst());
-                permute_paths(_fib->getRoutes(pkt.dst()));
             }
         }
     // Option for up route to send to other DC 
     // If staying in DC never go to the fat tree switch at the top
     } else if (_type == CORE) {
-        // CORE switches should route inter-DC traffic to WAN switch
+        cerr << "CORE switch " << _id << " routing packet to dest " << pkt.dst() << endl;
+        
+        // Check if this is inter-DC traffic
         if (is_inter_dc_traffic(pkt.dst())) {
-            cerr << "CORE switch " << _id << " routing inter-DC traffic to WAN switch" << endl;
+            cerr << "  CORE switch " << _id << " routing inter-DC traffic to WAN switch" << endl;
             cerr << "  Destination host " << pkt.dst() << " is in different DC" << endl;
+            cerr << "  CORE switch " << _id << " DC ID: " << _dc_id << ", dest DC: " << (pkt.dst() / _nodes_per_dc) << endl;
+            cerr << "  CORE switch " << _id << " connected to FatTree topology with host offset: " << (_ft ? _ft->_host_id_offset : -1) << endl;
             
             // Check if we have a WAN switch connected
             if (!_ft->get_wan_switch()) {
@@ -594,27 +640,56 @@ Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
                 return nullptr;
             }
             
-            // Create route to WAN switch
+            // Create route to WAN switch through physical connections
+            // We need to find the actual queue and pipe to the WAN switch
             Route* r = new Route();
-            r->push_back(_ft->get_wan_switch());
+            
+            // Find the queue from this CORE switch to the WAN switch
+            // The queue should be in the CORE switch's ports
+            bool found_wan_connection = false;
+            for (size_t i = 0; i < _ports.size(); i++) {
+                BaseQueue* q = _ports[i];
+                if (q && q->getRemoteEndpoint()) {
+                    // Check if this queue leads to the WAN switch
+                    Pipe* pipe = dynamic_cast<Pipe*>(q->getRemoteEndpoint());
+                    if (pipe && pipe->getRemoteEndpoint() == _ft->get_wan_switch()) {
+                        r->push_back(q);
+                        r->push_back(pipe);
+                        r->push_back(_ft->get_wan_switch());
+                        found_wan_connection = true;
+                        break;
+                    }
+                }
+            }
+            
+            if (!found_wan_connection) {
+                cerr << "  ERROR: CORE switch " << _id << " has no physical connection to WAN switch" << endl;
+                delete r;
+                return nullptr;
+            }
+            
             _fib->addRoute(pkt.dst(), r, 1, UP);
             
             cerr << "  Created route to WAN switch for host " << pkt.dst() << endl;
-        }
-        uint32_t nup = _ft->MIN_POD_AGG_SWITCH(_ft->HOST_POD(pkt.dst())) + (_id % _ft->agg_switches_per_pod());
-        for (uint32_t b = 0; b < _ft->bundlesize(CORE_TIER); b++) {
-            Route *r = new Route();
-            // cout << "CORE switch " << _id << " adding route to " << pkt.dst() << " via AGG " << nup << endl;
+        } else {
+            cerr << "  CORE switch " << _id << " routing local traffic down to AGG" << endl;
+            // Route local traffic down to AGG switches
+            uint32_t adjusted_dst = _ft->adjusted_host(pkt.dst());
+            uint32_t nup = _ft->MIN_POD_AGG_SWITCH(_ft->HOST_POD(adjusted_dst)) + (_id % _ft->agg_switches_per_pod());
+            for (uint32_t b = 0; b < _ft->bundlesize(CORE_TIER); b++) {
+                Route *r = new Route();
+                // cout << "CORE switch " << _id << " adding route to " << pkt.dst() << " via AGG " << nup << endl;
 
-            assert (_ft->queues_nc_nup[_id][nup][b]);
-            r->push_back(_ft->queues_nc_nup[_id][nup][b]);
-            assert(((BaseQueue*)r->at(0))->getSwitch() == this);
+                assert (_ft->queues_nc_nup[_id][nup][b]);
+                r->push_back(_ft->queues_nc_nup[_id][nup][b]);
+                assert(((BaseQueue*)r->at(0))->getSwitch() == this);
 
-            assert (_ft->pipes_nc_nup[_id][nup][b]);
-            r->push_back(_ft->pipes_nc_nup[_id][nup][b]);
+                assert (_ft->pipes_nc_nup[_id][nup][b]);
+                r->push_back(_ft->pipes_nc_nup[_id][nup][b]);
 
-            r->push_back(_ft->queues_nc_nup[_id][nup][b]->getRemoteEndpoint());
-            _fib->addRoute(pkt.dst(),r,1,DOWN);
+                r->push_back(_ft->queues_nc_nup[_id][nup][b]->getRemoteEndpoint());
+                _fib->addRoute(pkt.dst(),r,1,DOWN);
+            }
         }
     }
     else {
@@ -627,19 +702,6 @@ Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
     return getNextHop(pkt, ingress_port);
 };
 
-// WAN routing helper methods
-bool FatTreeSwitch::should_route_to_wan(uint32_t dest_host) const {
-    if (_type != WAN) return false;
-    
-    // Check if destination is in a different DC
-    uint32_t dest_dc = dest_host / _nodes_per_dc;
-    return dest_dc != _dc_id;
-}
-
-uint32_t FatTreeSwitch::get_wan_dest_dc(uint32_t dest_host) const {
-    return dest_host / _nodes_per_dc;
-}
-
 // Helper to check if traffic is inter-DC
 bool FatTreeSwitch::is_inter_dc_traffic(uint32_t dest_host) const {
     // If we don't have multi-DC info, assume it's local traffic
@@ -649,6 +711,13 @@ bool FatTreeSwitch::is_inter_dc_traffic(uint32_t dest_host) const {
     
     uint32_t dest_dc = dest_host / _nodes_per_dc;
     bool is_inter = (dest_dc != _dc_id);
+    
+    // Debug output for CORE switches
+    if (_type == CORE) {
+        std::cout << "  CORE switch " << _id << " checking if host " << dest_host << " is inter-DC" << std::endl;
+        std::cout << "    dest_dc=" << dest_dc << ", _dc_id=" << _dc_id << ", is_inter=" << is_inter << std::endl;
+    }
+    
     return is_inter;
 }
 

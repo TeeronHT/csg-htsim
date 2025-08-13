@@ -132,9 +132,7 @@ public:
     void set_nodes_per_dc(uint32_t nodes_per_dc) { _nodes_per_dc = nodes_per_dc; }
     uint32_t get_nodes_per_dc() const { return _nodes_per_dc; }
     
-    // WAN routing logic
-    bool should_route_to_wan(uint32_t dest_host) const;
-    uint32_t get_wan_dest_dc(uint32_t dest_host) const;
+    // Helper to check if traffic is inter-DC
     bool is_inter_dc_traffic(uint32_t dest_host) const;
     
     // Public method to add routes to FIB (for WAN switches)

@@ -1105,16 +1105,37 @@ vector<const Route*>* FatTreeTopology::get_bidir_paths(uint32_t src, uint32_t de
     
     // Convert global host IDs to local host IDs if host offset is set
     uint32_t local_src = adjusted_host(src);
-    uint32_t local_dest = adjusted_host(dest);
+    
+    // For inter-DC traffic, we should NOT adjust the destination host ID
+    // because it's not in the current datacenter
+    uint32_t local_dest = dest; // Keep original dest for inter-DC traffic
+    
+    // Check if this is inter-DC traffic BEFORE calling adjusted_host on dest
+    bool is_inter_dc = false;
+    if (dest >= _host_id_offset + _no_of_nodes || dest < _host_id_offset) {
+        // Destination is outside this datacenter - this is inter-DC traffic
+        is_inter_dc = true;
+        std::cout << "  FatTree: Inter-DC traffic detected. Dest host " << dest << " is outside local DC" << std::endl;
+        std::cout << "  FatTree: Global dest=" << dest << ", host_offset=" << _host_id_offset << ", max_local=" << (_host_id_offset + _no_of_nodes - 1) << std::endl;
+    } else {
+        // Destination is within this datacenter - use adjusted host ID
+        local_dest = adjusted_host(dest);
+    }
+    
+    // Safety check for host ID overflow (should not happen with the fix above)
+    if (local_dest > dest && _host_id_offset > 0 && !is_inter_dc) {
+        std::cout << "  FatTree: Host ID overflow detected - dest=" << dest << ", local_dest=" << local_dest 
+                  << ", host_offset=" << _host_id_offset << std::endl;
+        std::cout << "  FatTree: This indicates the destination is in a different datacenter" << std::endl;
+    }
     
     std::cout << "  FatTree: global src=" << src << " dest=" << dest 
               << " local src=" << local_src << " dest=" << local_dest 
               << " max_nodes=" << _no_of_nodes << " host_offset=" << _host_id_offset << std::endl;
     
-    // Validate that the hosts are within the local datacenter
-    if (local_src >= _no_of_nodes || local_dest >= _no_of_nodes) {
-        std::cerr << "ERROR: Host IDs out of range. src=" << src << " (local=" << local_src 
-                  << "), dest=" << dest << " (local=" << local_dest 
+    // Validate that the source is within the local datacenter
+    if (local_src >= _no_of_nodes) {
+        std::cerr << "ERROR: Source host ID out of range. src=" << src << " (local=" << local_src 
                   << "), max=" << _no_of_nodes << std::endl;
         return paths;
     }
@@ -1125,6 +1146,163 @@ vector<const Route*>* FatTreeTopology::get_bidir_paths(uint32_t src, uint32_t de
     //Queue* pqueue = new Queue(_linkspeed, memFromPkt(FEEDER_BUFFER), *_eventlist, simplequeuelogger);
     //pqueue->setName("PQueue_" + ntoa(src) + "_" + ntoa(dest));
     //logfile->writeName(*pqueue);
+    
+    // Handle inter-DC routing
+    if (is_inter_dc) {
+        std::cout << "  FatTree: Creating inter-DC route to WAN switch" << std::endl;
+        
+        // Safety check: ensure we have a valid source host
+        if (local_src >= _no_of_nodes) {
+            std::cerr << "  FatTree: ERROR - Invalid source host for inter-DC routing" << std::endl;
+            return paths;
+        }
+        
+        // For inter-DC traffic, route to the WAN switch
+        // We need to go up through the FatTree hierarchy to reach the WAN switch
+        routeout = new Route();
+        
+        // Start from source host to TOR
+        if (!queues_ns_nlp[local_src][HOST_POD_SWITCH(local_src)][0]) {
+            std::cerr << "  FatTree: ERROR - NULL queue from host " << local_src << " to TOR switch" << std::endl;
+            delete routeout;
+            return paths;
+        }
+        routeout->push_back(queues_ns_nlp[local_src][HOST_POD_SWITCH(local_src)][0]);
+        
+        if (!pipes_ns_nlp[local_src][HOST_POD_SWITCH(local_src)][0]) {
+            std::cerr << "  FatTree: ERROR - NULL pipe from host " << local_src << " to TOR switch" << std::endl;
+            delete routeout;
+            return paths;
+        }
+        routeout->push_back(pipes_ns_nlp[local_src][HOST_POD_SWITCH(local_src)][0]);
+        
+        if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN) {
+            PacketSink* remote = queues_ns_nlp[local_src][HOST_POD_SWITCH(local_src)][0]->getRemoteEndpoint();
+            if (!remote) {
+                std::cerr << "  FatTree: ERROR - NULL remote endpoint from host " << local_src << " to TOR switch" << std::endl;
+                delete routeout;
+                return paths;
+            }
+            routeout->push_back(remote);
+        }
+        
+        // Go up to AGG switch
+        uint32_t pod = HOST_POD(local_src);
+        uint32_t agg_switch = MIN_POD_AGG_SWITCH(pod);
+        
+        std::cout << "  FatTree: Host " << local_src << " in pod " << pod << ", TOR switch " << HOST_POD_SWITCH(local_src) << ", AGG switch " << agg_switch << std::endl;
+        
+        if (!queues_nlp_nup[HOST_POD_SWITCH(local_src)][agg_switch][0]) {
+            std::cerr << "  FatTree: ERROR - NULL queue from TOR " << HOST_POD_SWITCH(local_src) << " to AGG " << agg_switch << std::endl;
+            std::cerr << "  FatTree: This suggests the TOR-AGG connection was not properly initialized" << std::endl;
+            delete routeout;
+            return paths;
+        }
+        routeout->push_back(queues_nlp_nup[HOST_POD_SWITCH(local_src)][agg_switch][0]);
+        
+        if (!pipes_nlp_nup[HOST_POD_SWITCH(local_src)][agg_switch][0]) {
+            std::cerr << "  FatTree: ERROR - NULL pipe from TOR to AGG switch" << std::endl;
+            delete routeout;
+            return paths;
+        }
+        routeout->push_back(pipes_nlp_nup[HOST_POD_SWITCH(local_src)][agg_switch][0]);
+        
+        if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN) {
+            PacketSink* remote = queues_nlp_nup[HOST_POD_SWITCH(local_src)][agg_switch][0]->getRemoteEndpoint();
+            if (!remote) {
+                std::cerr << "  FatTree: ERROR - NULL remote endpoint from TOR to AGG switch" << std::endl;
+                delete routeout;
+                return paths;
+            }
+            routeout->push_back(remote);
+        }
+        
+        // Go up to CORE switch
+        // For inter-DC routing, we need to find a valid CORE switch that this AGG switch connects to
+        uint32_t core_switch = 0;
+        bool found_core = false;
+        
+        // Find the first valid CORE switch that this AGG switch connects to
+        uint32_t podpos = agg_switch % _agg_switches_per_pod;
+        for (uint32_t l = 0; l < _radix_up[AGG_TIER]/_bundlesize[CORE_TIER]; l++) {
+            uint32_t candidate_core = podpos + _agg_switches_per_pod * l;
+            if (candidate_core < NCORE && queues_nup_nc[agg_switch][candidate_core][0] != NULL) {
+                core_switch = candidate_core;
+                found_core = true;
+                break;
+            }
+        }
+        
+        if (!found_core) {
+            std::cerr << "  FatTree: ERROR - No valid CORE switch found for AGG " << agg_switch << std::endl;
+            std::cerr << "  FatTree: AGG switch " << agg_switch << " has no valid CORE connections" << std::endl;
+            delete routeout;
+            return paths;
+        }
+        
+        std::cout << "  FatTree: AGG switch " << agg_switch << " to CORE switch " << core_switch << std::endl;
+        std::cout << "  FatTree: queues_nup_nc size: [" << queues_nup_nc.size() << "][" << queues_nup_nc[0].size() << "][" << queues_nup_nc[0][0].size() << "]" << std::endl;
+        routeout->push_back(queues_nup_nc[agg_switch][core_switch][0]);
+        
+        if (!pipes_nup_nc[agg_switch][core_switch][0]) {
+            std::cerr << "  FatTree: ERROR - NULL pipe from AGG to CORE switch" << std::endl;
+            delete routeout;
+            return paths;
+        }
+        routeout->push_back(pipes_nup_nc[agg_switch][core_switch][0]);
+        
+        if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN) {
+            PacketSink* remote = queues_nup_nc[agg_switch][core_switch][0]->getRemoteEndpoint();
+            if (!remote) {
+                std::cerr << "  FatTree: ERROR - NULL remote endpoint from AGG to CORE switch" << std::endl;
+                delete routeout;
+                return paths;
+            }
+            routeout->push_back(remote);
+        }
+        
+        // Finally, route to WAN switch
+        if (_wan_switch) {
+            // Additional safety check for WAN switch
+            if (dynamic_cast<PacketSink*>(_wan_switch) == nullptr) {
+                std::cerr << "  FatTree: ERROR - WAN switch is not a valid PacketSink!" << std::endl;
+                delete routeout;
+                return paths;
+            }
+            routeout->push_back(_wan_switch);
+            std::cout << "  FatTree: Added WAN switch to route" << std::endl;
+        } else {
+            std::cerr << "  FatTree: ERROR - No WAN switch connected!" << std::endl;
+            delete routeout;
+            return paths;
+        }
+        
+        // Validate the route before adding it
+        if (routeout->size() == 0) {
+            std::cerr << "  FatTree: ERROR - Created empty route!" << std::endl;
+            delete routeout;
+            return paths;
+        }
+        
+        // Validate that the route ends at a WAN switch (not a local host)
+        if (routeout->size() > 0) {
+            PacketSink* last_element = dynamic_cast<PacketSink*>(routeout->at(routeout->size() - 1));
+            if (last_element) {
+                FatTreeSwitch* last_switch = dynamic_cast<FatTreeSwitch*>(last_element);
+                if (last_switch && last_switch->getType() == FatTreeSwitch::WAN) {
+                    std::cout << "  FatTree: Route ends at WAN switch (correct)" << std::endl;
+                } else {
+                    std::cout << "  FatTree: Route ends at non-WAN element (unexpected)" << std::endl;
+                }
+            }
+        }
+        
+        paths->push_back(routeout);
+        check_non_null(routeout);
+        std::cout << "  FatTree: Created inter-DC route with " << routeout->size() << " elements" << std::endl;
+        return paths;
+    }
+    
     if (HOST_POD_SWITCH(local_src)==HOST_POD_SWITCH(local_dest)){
   
         // forward path

@@ -40,6 +40,7 @@ private:
     void init_datacenters();
     void init_wan_connections();
     void setup_wan_routing();
+    void create_core_wan_connections(uint32_t dc_id);
     
     uint32_t _num_datacenters;
     uint32_t _nodes_per_dc;
