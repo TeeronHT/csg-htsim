@@ -325,7 +325,7 @@ int main(int argc, char **argv) {
                         
         if (crt->size>0){
             sender->set_flowsize(crt->size, k);
-            cout << "Size of packet" << crt->size << endl;
+            cout << "Size of packet: " << crt->size << endl;
         } 
                 
         if (host_lb == PLB) {
@@ -453,40 +453,26 @@ int main(int argc, char **argv) {
     // GO!
     cout << "Starting simulation" << endl;
     simtime_picosec checkpoint = timeFromUs(100.0);
-    int event_count = 0;
-    try {
-        while (eventlist.doNextEvent()) {
-            event_count++;
-            if (event_count % 10000 == 0) {
-                cout << "Simulation time " << timeAsUs(eventlist.now()) << endl;
-            }
-            if (eventlist.now() > checkpoint) {
-                checkpoint += timeFromUs(100.0);
-                if (endtime == 0) {
-                    // Iterate through sinks to see if they have completed the flows
-                    bool all_done = true;
-                    list <ConstantErasureCcaSink*>::iterator sink_i;
-                    for (sink_i = sinks.begin(); sink_i != sinks.end(); sink_i++) {
-                        if ((*sink_i)->_src->_completion_time == 0) {
-                            all_done = false;
-                            break;
-                        }
-                    }
-                    if (all_done) {
-                        cout << "All flows completed" << endl;
+    while (eventlist.doNextEvent()) {
+        if (eventlist.now() > checkpoint) {
+            cout << "Simulation time " << timeAsUs(eventlist.now()) << endl;
+            checkpoint += timeFromUs(100.0);
+            if (endtime == 0) {
+                // Iterate through sinks to see if they have completed the flows
+                bool all_done = true;
+                list <ConstantErasureCcaSink*>::iterator sink_i;
+                for (sink_i = sinks.begin(); sink_i != sinks.end(); sink_i++) {
+                    if ((*sink_i)->_src->_completion_time == 0) {
+                        all_done = false;
                         break;
                     }
                 }
+                if (all_done) {
+                    cout << "All flows completed" << endl;
+                    break;
+                }
             }
         }
-    } catch (const std::exception& e) {
-        cout << "Exception caught during simulation: " << e.what() << endl;
-        cout << "Event count: " << event_count << ", Time: " << timeAsUs(eventlist.now()) << endl;
-        throw;
-    } catch (...) {
-        cout << "Unknown exception caught during simulation" << endl;
-        cout << "Event count: " << event_count << ", Time: " << timeAsUs(eventlist.now()) << endl;
-        throw;
     }
 
     cout << "Done" << endl;
