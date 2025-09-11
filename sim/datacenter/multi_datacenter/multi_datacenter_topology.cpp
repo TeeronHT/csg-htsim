@@ -51,11 +51,11 @@ void MultiDatacenterTopology::init_datacenters() {
         std::cout << "Creating DC " << dc_id << "..." << std::endl;
         
         // Create individual fat tree topology for this datacenter
-        std::cout << "  Creating FatTreeTopology for DC " << dc_id << "..." << std::endl;
-        _datacenters[dc_id] = new FatTreeTopology(_nodes_per_dc, _intra_dc_speed, _intra_dc_queue_size,
+        std::cout << "  Creating MultiFatTreeTopology for DC " << dc_id << "..." << std::endl;
+        _datacenters[dc_id] = new MultiFatTreeTopology(_nodes_per_dc, _intra_dc_speed, _intra_dc_queue_size,
                                                   _logger_factory, _eventlist, nullptr, _queue_type, 
                                                   0, 0, CONST_SCHEDULER);
-        std::cout << "  FatTreeTopology created for DC " << dc_id << std::endl;
+        std::cout << "  MultiFatTreeTopology created for DC " << dc_id << std::endl;
         
         // Set host offset for this datacenter
         uint32_t host_offset = dc_id * _nodes_per_dc;
@@ -72,8 +72,8 @@ void MultiDatacenterTopology::init_datacenters() {
         // Pass the FatTree topology to the WAN switch so it can route to local hosts
         // DEBUG: Verify we're passing the correct FatTree topology
         std::cout << "  Creating WAN switch " << dc_id << " with FatTree topology for DC " << dc_id << std::endl;
-        _wan_switches[dc_id] = new FatTreeSwitch(*_eventlist, ss.str(), FatTreeSwitch::WAN, dc_id, 
-                                                 timeFromUs((uint32_t)1), _datacenters[dc_id]);
+        _wan_switches[dc_id] = new MultiFatTreeSwitch(*_eventlist, ss.str(), MultiFatTreeSwitch::WAN, dc_id, 
+                                                      timeFromUs((uint32_t)1), _datacenters[dc_id]);
         
         // Configure WAN switch for multi-DC
         _wan_switches[dc_id]->set_dc_id(dc_id);
@@ -134,7 +134,7 @@ void MultiDatacenterTopology::init_wan_connections() {
 void MultiDatacenterTopology::setup_wan_routing() {
     // Set up routing tables for WAN switches
     for (uint32_t dc_id = 0; dc_id < _num_datacenters; dc_id++) {
-        FatTreeSwitch* wan_switch = _wan_switches[dc_id];
+        MultiFatTreeSwitch* wan_switch = _wan_switches[dc_id];
         
         // First, add routes from WAN switch to CORE switches (not to individual hosts)
         // The CORE switches will handle routing to individual hosts using existing FatTree logic
@@ -142,7 +142,7 @@ void MultiDatacenterTopology::setup_wan_routing() {
         
         // Create routes from WAN switch to each CORE switch
         for (uint32_t core_switch_id = 0; core_switch_id < _datacenters[dc_id]->switches_c.size(); core_switch_id++) {
-            FatTreeSwitch* core_switch = (FatTreeSwitch*)_datacenters[dc_id]->switches_c[core_switch_id];
+            MultiFatTreeSwitch* core_switch = (MultiFatTreeSwitch*)_datacenters[dc_id]->switches_c[core_switch_id];
             if (core_switch) {
                 // Add this route for all hosts that would be routed through this CORE switch
                 // We'll use a simple mapping: hosts in pods 0,1,2... map to CORE switches 0,1,2...
@@ -166,10 +166,10 @@ void MultiDatacenterTopology::setup_wan_routing() {
                             wan_switch->add_wan_route(global_host_id, core_route);
                             local_routes_created++;
                             
-                            if (local_host % 32 == 0) { // Log every 32nd host to avoid spam
-                                std::cout << "Created route from WAN switch DC" << dc_id << " to host " << global_host_id 
-                                          << " via CORE switch " << core_switch_id << std::endl;
-                            }
+                            // if (local_host % 32 == 0) { // Log every 32nd host to avoid spam
+                            //     std::cout << "Created route from WAN switch DC" << dc_id << " to host " << global_host_id 
+                            //               << " via CORE switch " << core_switch_id << std::endl;
+                            // }
                         }
                     }
                 }
@@ -226,14 +226,14 @@ vector<const Route*>* MultiDatacenterTopology::get_bidir_paths(uint32_t src, uin
     uint32_t src_local = get_local_host_id(src);
     uint32_t dest_local = get_local_host_id(dest);
     
-    std::cout << "get_bidir_paths: src=" << src << " dest=" << dest 
-              << " (DC" << src_dc << ":" << src_local << " -> DC" << dest_dc << ":" << dest_local << ")" << std::endl;
-    std::cout << "  DC" << src_dc << " has " << _datacenters[src_dc]->no_of_nodes() << " nodes" << std::endl;
+    // std::cout << "get_bidir_paths: src=" << src << " dest=" << dest 
+    //           << " (DC" << src_dc << ":" << src_local << " -> DC" << dest_dc << ":" << dest_local << ")" << std::endl;
+    // std::cout << "  DC" << src_dc << " has " << _datacenters[src_dc]->no_of_nodes() << " nodes" << std::endl;
     
     if (src_dc == dest_dc) {
         // Intra-DC routing - use the local fat tree topology
-        std::cout << "  Intra-DC routing" << std::endl;
-        std::cout << "  Local host IDs: src=" << src_local << " dest=" << dest_local << std::endl;
+        // std::cout << "  Intra-DC routing" << std::endl;
+        // std::cout << "  Local host IDs: src=" << src_local << " dest=" << dest_local << std::endl;
         
         // Validate datacenter access
         if (src_dc >= _datacenters.size()) {
@@ -247,7 +247,7 @@ vector<const Route*>* MultiDatacenterTopology::get_bidir_paths(uint32_t src, uin
         }
         
         vector<const Route*>* local_paths = _datacenters[src_dc]->get_bidir_paths(src, dest, reverse);
-        std::cout << "  Got " << local_paths->size() << " paths" << std::endl;
+        // std::cout << "  Got " << local_paths->size() << " paths" << std::endl;
         
         if (local_paths->empty()) {
             std::cerr << "ERROR: No paths found from host " << src_local << " to " << dest_local << " in DC " << src_dc << std::endl;
@@ -260,7 +260,7 @@ vector<const Route*>* MultiDatacenterTopology::get_bidir_paths(uint32_t src, uin
         }
     } else {
         // Inter-DC routing - need to go through WAN
-        std::cout << "  Inter-DC routing - using WAN" << std::endl;
+        // std::cout << "  Inter-DC routing - using WAN" << std::endl;
         
         // For inter-DC routing, we need to route through the local FatTree to the WAN switch
         // The FatTree routing logic should handle this automatically
@@ -272,7 +272,7 @@ vector<const Route*>* MultiDatacenterTopology::get_bidir_paths(uint32_t src, uin
             for (size_t i = 0; i < local_paths->size(); i++) {
                 paths->push_back((*local_paths)[i]);
             }
-            std::cout << "  Got " << local_paths->size() << " inter-DC paths from FatTree" << std::endl;
+            // std::cout << "  Got " << local_paths->size() << " inter-DC paths from FatTree" << std::endl;
         } else {
             std::cerr << "  Failed to get inter-DC paths from FatTree" << std::endl;
         }
@@ -342,7 +342,7 @@ bool MultiDatacenterTopology::is_inter_dc_flow(uint32_t src, uint32_t dest) cons
     return get_dc_id(src) != get_dc_id(dest);
 }
 
-FatTreeTopology* MultiDatacenterTopology::get_datacenter(uint32_t dc_id) const {
+MultiFatTreeTopology* MultiDatacenterTopology::get_datacenter(uint32_t dc_id) const {
     if (dc_id < _datacenters.size()) {
         return _datacenters[dc_id];
     }
@@ -353,11 +353,11 @@ void MultiDatacenterTopology::create_core_wan_connections(uint32_t dc_id) {
     std::cout << "Creating CORE-WAN connections for DC " << dc_id << std::endl;
     
     // Get the WAN switch for this datacenter
-    FatTreeSwitch* wan_switch = _wan_switches[dc_id];
+    MultiFatTreeSwitch* wan_switch = _wan_switches[dc_id];
     
     // Create connections from each CORE switch to the WAN switch
     for (uint32_t core_id = 0; core_id < _datacenters[dc_id]->switches_c.size(); core_id++) {
-        FatTreeSwitch* core_switch = (FatTreeSwitch*)_datacenters[dc_id]->switches_c[core_id];
+        MultiFatTreeSwitch* core_switch = (MultiFatTreeSwitch*)_datacenters[dc_id]->switches_c[core_id];
         if (!core_switch) {
             std::cerr << "ERROR: CORE switch " << core_id << " is null in DC " << dc_id << std::endl;
             continue;

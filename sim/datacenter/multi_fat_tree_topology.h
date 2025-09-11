@@ -12,6 +12,7 @@
 #include "logfile.h"
 #include "eventlist.h"
 #include "switch.h"
+#include "fat_tree_topology.h"
 #include <ostream>
 
 //#define N K*K*K/4
@@ -28,8 +29,9 @@ typedef enum {UPLINK, DOWNLINK} link_direction;
 #define TOR_TIER 0
 #define AGG_TIER 1
 #define CORE_TIER 2
+#define WAN_TIER 3
 
-class FatTreeTopology: public Topology{
+class MultiFatTreeTopology: public Topology{
 public:
     vector <Switch*> switches_lp;
     vector <Switch*> switches_up;
@@ -59,18 +61,20 @@ public:
     uint32_t flaky_links;
 
     // For regular topologies, just use the constructor.  For custom topologies, load from a config file.
-    static FatTreeTopology* load(const char * filename, QueueLoggerFactory* logger_factory, EventList& eventlist,
+    static MultiFatTreeTopology* load(const char * filename, QueueLoggerFactory* logger_factory, EventList& eventlist,
                                  mem_b queuesize, queue_type q_type, queue_type sender_q_type);
 
-    FatTreeTopology(uint32_t no_of_nodes, linkspeed_bps linkspeed, mem_b queuesize, QueueLoggerFactory* logger_factory,
+    MultiFatTreeTopology(uint32_t no_of_nodes, linkspeed_bps linkspeed, mem_b queuesize, QueueLoggerFactory* logger_factory,
                     EventList* ev,FirstFit* f, queue_type qt, simtime_picosec latency, simtime_picosec switch_latency, queue_type snd = FAIR_PRIO);
-    FatTreeTopology(uint32_t no_of_nodes, linkspeed_bps linkspeed, mem_b queuesize, QueueLoggerFactory* logger_factory,
+    MultiFatTreeTopology(uint32_t no_of_nodes, linkspeed_bps linkspeed, mem_b queuesize, QueueLoggerFactory* logger_factory,
                     EventList* ev,FirstFit* f, queue_type qt);      
-    FatTreeTopology(uint32_t no_of_nodes, linkspeed_bps linkspeed, mem_b queuesize, QueueLoggerFactory* logger_factory,
+    MultiFatTreeTopology(uint32_t no_of_nodes, linkspeed_bps linkspeed, mem_b queuesize, QueueLoggerFactory* logger_factory,
                     EventList* ev,FirstFit* f, queue_type qt, uint32_t fail, double fail_pct = 0);
-    FatTreeTopology(uint32_t no_of_nodes, linkspeed_bps linkspeed, mem_b queuesize, QueueLoggerFactory* logger_factory,
+    MultiFatTreeTopology(uint32_t no_of_nodes, linkspeed_bps linkspeed, mem_b queuesize, QueueLoggerFactory* logger_factory,
                     EventList* ev,FirstFit* f, queue_type qt, queue_type sender_qt, uint32_t fail, double fail_pct = 0, bool rts = false, simtime_picosec hoplatency = 0, 
                     int flakylinks = 0, simtime_picosec interarrival = 0, simtime_picosec duration = 0);
+    
+    virtual ~MultiFatTreeTopology() {}
 
     static void set_tier_parameters(int tier, int radix_up, int radix_down, mem_b queue_up, mem_b queue_down, int bundlesize, linkspeed_bps downlink_speed, int oversub);
     void set_flaky_links(uint32_t num_links, simtime_picosec interarrival, simtime_picosec duration) {
@@ -177,9 +181,20 @@ public:
     //uint32_t getK() const {return K;}
     uint32_t getNAGG() const {return NAGG;}
     
+    // For multi-datacenter support
+    void set_host_offset(int offset);
+    uint32_t adjusted_host(uint32_t global_host_id) const;
+    
+    // Multi-DC support
+    void set_multi_dc_info(uint32_t dc_id, uint32_t total_dcs, uint32_t nodes_per_dc);
+    void connect_wan_switch(Switch* wan_switch);
+    Switch* get_wan_switch() const { return _wan_switch; }
+    uint32_t _host_id_offset;
+    
 private:
+    Switch* _wan_switch; // Reference to WAN switch for inter-DC routing
     map<Queue*,int> _link_usage;
-    static FatTreeTopology* load(istream& file, QueueLoggerFactory* logger_factory, EventList& eventlist,
+    static MultiFatTreeTopology* load(istream& file, QueueLoggerFactory* logger_factory, EventList& eventlist,
                                  mem_b queuesize, queue_type q_type, queue_type sender_q_type);
     void set_linkspeeds(linkspeed_bps linkspeed);
     void set_queue_sizes(mem_b queuesize);

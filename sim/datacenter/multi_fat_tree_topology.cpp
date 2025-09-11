@@ -1,4 +1,5 @@
 // -*- c-basic-offset: 4; indent-tabs-mode: nil -*-
+#include "multi_fat_tree_topology.h"
 #include "fat_tree_topology.h"
 #include <vector>
 #include "string.h"
@@ -8,6 +9,7 @@
 #include "main.h"
 #include "queue.h"
 #include "fat_tree_switch.h"
+#include "multi_fat_tree_switch.h"
 #include "compositequeue.h"
 #include "aeolusqueue.h"
 #include "prioqueue.h"
@@ -23,20 +25,20 @@
 extern void tokenize(string const &str, const char delim, vector<string> &out);
 
 // default to 3-tier topology.  Change this with set_tiers() before calling the constructor.
-uint32_t FatTreeTopology::_tiers = 3;
-simtime_picosec FatTreeTopology::_link_latencies[] = {0,0,0};
-simtime_picosec FatTreeTopology::_switch_latencies[] = {0,0,0};
-uint32_t FatTreeTopology::_hosts_per_pod = 0;
-uint32_t FatTreeTopology::_radix_up[] = {0,0};
-uint32_t FatTreeTopology::_radix_down[] = {0,0,0};
-mem_b FatTreeTopology::_queue_up[] = {0,0};
-mem_b FatTreeTopology::_queue_down[] = {0,0,0};
-uint32_t FatTreeTopology::_bundlesize[] = {1,1,1};
-uint32_t FatTreeTopology::_oversub[] = {1,1,1};
-linkspeed_bps FatTreeTopology::_downlink_speeds[] = {0,0,0};
+uint32_t MultiFatTreeTopology::_tiers = 3;
+simtime_picosec MultiFatTreeTopology::_link_latencies[] = {0,0,0};
+simtime_picosec MultiFatTreeTopology::_switch_latencies[] = {0,0,0};
+uint32_t MultiFatTreeTopology::_hosts_per_pod = 0;
+uint32_t MultiFatTreeTopology::_radix_up[] = {0,0};
+uint32_t MultiFatTreeTopology::_radix_down[] = {0,0,0};
+mem_b MultiFatTreeTopology::_queue_up[] = {0,0};
+mem_b MultiFatTreeTopology::_queue_down[] = {0,0,0};
+uint32_t MultiFatTreeTopology::_bundlesize[] = {1,1,1};
+uint32_t MultiFatTreeTopology::_oversub[] = {1,1,1};
+linkspeed_bps MultiFatTreeTopology::_downlink_speeds[] = {0,0,0};
 
 void
-FatTreeTopology::set_tier_parameters(int tier, int radix_up, int radix_down, mem_b queue_up, mem_b queue_down, int bundlesize, linkspeed_bps linkspeed, int oversub) {
+MultiFatTreeTopology::set_tier_parameters(int tier, int radix_up, int radix_down, mem_b queue_up, mem_b queue_down, int bundlesize, linkspeed_bps linkspeed, int oversub) {
     // tier is 0 for ToR, 1 for agg switch, 2 for core switch
     if (tier < CORE_TIER) {
         // no uplinks from core switches
@@ -52,10 +54,10 @@ FatTreeTopology::set_tier_parameters(int tier, int radix_up, int radix_down, mem
 }
 
 // load a config file and use it to create a FatTreeTopology
-FatTreeTopology* FatTreeTopology::load(const char * filename, QueueLoggerFactory* logger_factory, EventList& eventlist, mem_b queuesize, queue_type q_type, queue_type sender_q_type){
+MultiFatTreeTopology* MultiFatTreeTopology::load(const char * filename, QueueLoggerFactory* logger_factory, EventList& eventlist, mem_b queuesize, queue_type q_type, queue_type sender_q_type){
     std::ifstream file(filename);
     if (file.is_open()) {
-        FatTreeTopology* ft = load(file, logger_factory, eventlist, queuesize, q_type, sender_q_type);
+        MultiFatTreeTopology* ft = load(file, logger_factory, eventlist, queuesize, q_type, sender_q_type);
         file.close();
 	return ft;
     } else {
@@ -65,7 +67,7 @@ FatTreeTopology* FatTreeTopology::load(const char * filename, QueueLoggerFactory
 }
 
 // in-place conversion to lower case
-void to_lower(string& s) {
+static void to_lower(string& s) {
     string::iterator i;
     for (i = s.begin(); i != s.end(); i++) {
         *i = std::tolower(*i);
@@ -74,7 +76,7 @@ void to_lower(string& s) {
         //[](unsigned char c){ return std::tolower(c); });
 }
 
-FatTreeTopology* FatTreeTopology::load(istream& file, QueueLoggerFactory* logger_factory, EventList& eventlist, mem_b queuesize, queue_type q_type, queue_type sender_q_type){
+MultiFatTreeTopology* MultiFatTreeTopology::load(istream& file, QueueLoggerFactory* logger_factory, EventList& eventlist, mem_b queuesize, queue_type q_type, queue_type sender_q_type){
     //cout << "topo load start\n";
     std::string line;
     int linecount = 0;
@@ -239,12 +241,52 @@ FatTreeTopology* FatTreeTopology::load(istream& file, QueueLoggerFactory* logger
     }
 
     cout << "Topology load done\n";
-    FatTreeTopology* ft = new FatTreeTopology(no_of_nodes, 0, 0, logger_factory, &eventlist, NULL, q_type, 0, 0, sender_q_type);
+    MultiFatTreeTopology* ft = new MultiFatTreeTopology(no_of_nodes, 0, 0, logger_factory, &eventlist, NULL, q_type, 0, 0, sender_q_type);
     cout << "FatTree constructor done, " << ft->no_of_nodes() << " nodes created\n";
     return ft;
 }
 
-FatTreeTopology::FatTreeTopology(uint32_t no_of_nodes, linkspeed_bps linkspeed, mem_b queuesize,
+
+void MultiFatTreeTopology::set_host_offset(int offset) {
+    _host_id_offset = offset;
+}
+
+uint32_t MultiFatTreeTopology::adjusted_host(uint32_t global_host_id) const {
+    return global_host_id - _host_id_offset;
+}
+
+void MultiFatTreeTopology::set_multi_dc_info(uint32_t dc_id, uint32_t total_dcs, uint32_t nodes_per_dc) {
+    // Set multi-DC information for all switches in this topology
+    for (size_t i = 0; i < switches_lp.size(); i++) {
+        MultiFatTreeSwitch* sw = (MultiFatTreeSwitch*)switches_lp[i];
+        sw->set_dc_id(dc_id);
+        sw->set_total_dcs(total_dcs);
+        sw->set_nodes_per_dc(nodes_per_dc);
+    }
+    
+    for (size_t i = 0; i < switches_up.size(); i++) {
+        MultiFatTreeSwitch* sw = (MultiFatTreeSwitch*)switches_up[i];
+        sw->set_dc_id(dc_id);
+        sw->set_total_dcs(total_dcs);
+        sw->set_nodes_per_dc(nodes_per_dc);
+    }
+    
+    for (size_t i = 0; i < switches_c.size(); i++) {
+        MultiFatTreeSwitch* sw = (MultiFatTreeSwitch*)switches_c[i];
+        sw->set_dc_id(dc_id);
+        sw->set_total_dcs(total_dcs);
+        sw->set_nodes_per_dc(nodes_per_dc);
+    }
+}
+
+void MultiFatTreeTopology::connect_wan_switch(Switch* wan_switch) {
+    // Store the WAN switch reference for use by CORE switches
+    _wan_switch = wan_switch;
+    std::cout << "Connected WAN switch to FatTree topology" << std::endl;
+}
+
+
+MultiFatTreeTopology::MultiFatTreeTopology(uint32_t no_of_nodes, linkspeed_bps linkspeed, mem_b queuesize,
                                  QueueLoggerFactory* logger_factory,
                                  EventList* ev,FirstFit * fit,queue_type q, simtime_picosec latency, simtime_picosec switch_latency, queue_type snd){
     
@@ -285,7 +327,7 @@ FatTreeTopology::FatTreeTopology(uint32_t no_of_nodes, linkspeed_bps linkspeed, 
     init_network();
 }
 
-FatTreeTopology::FatTreeTopology(uint32_t no_of_nodes, linkspeed_bps linkspeed, mem_b queuesize,
+MultiFatTreeTopology::MultiFatTreeTopology(uint32_t no_of_nodes, linkspeed_bps linkspeed, mem_b queuesize,
                                  QueueLoggerFactory* logger_factory,
                                  EventList* ev,FirstFit * fit,queue_type q){
     set_linkspeeds(linkspeed);
@@ -311,7 +353,7 @@ FatTreeTopology::FatTreeTopology(uint32_t no_of_nodes, linkspeed_bps linkspeed, 
     init_network();
 }
 
-FatTreeTopology::FatTreeTopology(uint32_t no_of_nodes, linkspeed_bps linkspeed, mem_b queuesize,
+MultiFatTreeTopology::MultiFatTreeTopology(uint32_t no_of_nodes, linkspeed_bps linkspeed, mem_b queuesize,
                                  QueueLoggerFactory* logger_factory,
                                  EventList* ev,FirstFit * fit, queue_type q, uint32_t num_failed, double fail_pct){
     set_linkspeeds(linkspeed);
@@ -340,7 +382,7 @@ FatTreeTopology::FatTreeTopology(uint32_t no_of_nodes, linkspeed_bps linkspeed, 
     init_network();
 }
 
-FatTreeTopology::FatTreeTopology(uint32_t no_of_nodes, linkspeed_bps linkspeed, mem_b queuesize,
+MultiFatTreeTopology::MultiFatTreeTopology(uint32_t no_of_nodes, linkspeed_bps linkspeed, mem_b queuesize,
                                  QueueLoggerFactory* logger_factory,
                                  EventList* ev,FirstFit * fit, queue_type qtype,
                                  queue_type sender_qtype, uint32_t num_failed, double fail_pct, bool rts, simtime_picosec hoplatency,
@@ -377,10 +419,11 @@ FatTreeTopology::FatTreeTopology(uint32_t no_of_nodes, linkspeed_bps linkspeed, 
     init_network();
 }
 
-void FatTreeTopology::set_linkspeeds(linkspeed_bps linkspeed) {
+void MultiFatTreeTopology::set_linkspeeds(linkspeed_bps linkspeed) {
     if (linkspeed != 0 && _downlink_speeds[TOR_TIER] != 0) {
         cerr << "Don't set linkspeeds using both the constructor and set_tier_parameters - use only one of the two\n";
-        exit(1);
+        // Instead of exiting, just skip setting the linkspeeds since they're already set
+        return;
     }
     if (linkspeed == 0 && _downlink_speeds[TOR_TIER] == 0) {
         cerr << "Linkspeed is not set, either as a default or by constructor\n";
@@ -392,7 +435,7 @@ void FatTreeTopology::set_linkspeeds(linkspeed_bps linkspeed) {
     if (_downlink_speeds[CORE_TIER] == 0) {_downlink_speeds[CORE_TIER] = linkspeed;}
 }
 
-void FatTreeTopology::set_queue_sizes(mem_b queuesize) {
+void MultiFatTreeTopology::set_queue_sizes(mem_b queuesize) {
     if (queuesize != 0) {
         // all tiers use the same queuesize
         for (int tier = TOR_TIER; tier <= CORE_TIER; tier++) {
@@ -406,7 +449,7 @@ void FatTreeTopology::set_queue_sizes(mem_b queuesize) {
     }
 }
 
-void FatTreeTopology::set_custom_params(uint32_t no_of_nodes) {
+void MultiFatTreeTopology::set_custom_params(uint32_t no_of_nodes) {
     //cout << "set_custom_params" << endl;
     // do some sanity checking before we proceed
     assert(_hosts_per_pod > 0);
@@ -534,7 +577,7 @@ void FatTreeTopology::set_custom_params(uint32_t no_of_nodes) {
 }
 
 
-void FatTreeTopology::set_params(uint32_t no_of_nodes) {
+void MultiFatTreeTopology::set_params(uint32_t no_of_nodes) {
     if (_hosts_per_pod > 0) {
         // if we've set all the detailed parameters, we'll use them, otherwise fall through to defaults
         set_custom_params(no_of_nodes);
@@ -609,7 +652,7 @@ void FatTreeTopology::set_params(uint32_t no_of_nodes) {
     alloc_vectors();
 }
 
-void FatTreeTopology::alloc_vectors() {
+void MultiFatTreeTopology::alloc_vectors() {
 
     switches_lp.resize(NTOR,NULL);
     switches_up.resize(NAGG,NULL);
@@ -641,7 +684,7 @@ void FatTreeTopology::alloc_vectors() {
     queues_ns_nlp.resize(NSRV, vector< vector<BaseQueue*> >(NTOR, vector<BaseQueue*>(_bundlesize[TOR_TIER])));
 }
 
-BaseQueue* FatTreeTopology::alloc_src_queue(QueueLogger* queueLogger){
+BaseQueue* MultiFatTreeTopology::alloc_src_queue(QueueLogger* queueLogger){
     linkspeed_bps linkspeed = _downlink_speeds[TOR_TIER]; // linkspeeds are symmetric
     switch (_sender_qt) {
     case SWIFT_SCHEDULER:
@@ -659,7 +702,7 @@ BaseQueue* FatTreeTopology::alloc_src_queue(QueueLogger* queueLogger){
     }
 }
 
-BaseQueue* FatTreeTopology::alloc_queue(QueueLogger* queueLogger, mem_b queuesize,
+BaseQueue* MultiFatTreeTopology::alloc_queue(QueueLogger* queueLogger, mem_b queuesize,
                                         link_direction dir, int switch_tier, bool tor = false){
     if (dir == UPLINK) {
         switch_tier++; // _downlink_speeds is set for the downlinks, so uplinks need to use the tier above's linkspeed
@@ -668,7 +711,7 @@ BaseQueue* FatTreeTopology::alloc_queue(QueueLogger* queueLogger, mem_b queuesiz
 }
 
 BaseQueue*
-FatTreeTopology::alloc_queue(QueueLogger* queueLogger, linkspeed_bps speed, mem_b queuesize,
+MultiFatTreeTopology::alloc_queue(QueueLogger* queueLogger, linkspeed_bps speed, mem_b queuesize,
                              link_direction dir, int switch_tier, bool tor){
     switch (_qt) {
     case RANDOM:
@@ -682,36 +725,36 @@ FatTreeTopology::alloc_queue(QueueLogger* queueLogger, linkspeed_bps speed, mem_
     case CTRL_PRIO:
         return new CtrlPrioQueue(speed, queuesize, *_eventlist, queueLogger);
     case AEOLUS:
-        return new AeolusQueue(speed, queuesize, FatTreeSwitch::_speculative_threshold_fraction * queuesize,  *_eventlist, queueLogger);
+        return new AeolusQueue(speed, queuesize, MultiFatTreeSwitch::_speculative_threshold_fraction * queuesize,  *_eventlist, queueLogger);
     case AEOLUS_ECN:
         {
-            AeolusQueue* q = new AeolusQueue(speed, queuesize, FatTreeSwitch::_speculative_threshold_fraction * queuesize ,  *_eventlist, queueLogger);
+            AeolusQueue* q = new AeolusQueue(speed, queuesize, MultiFatTreeSwitch::_speculative_threshold_fraction * queuesize ,  *_eventlist, queueLogger);
             if (!tor || dir == UPLINK) {
                 // don't use ECN on ToR downlinks
-                q->set_ecn_threshold(FatTreeSwitch::_ecn_threshold_fraction * queuesize);
+                q->set_ecn_threshold(MultiFatTreeSwitch::_ecn_threshold_fraction * queuesize);
             }
             return q;
         }
     case ECN:
-        return new ECNQueue(speed, queuesize, *_eventlist, queueLogger, FatTreeSwitch::_ecn_threshold_fraction * queuesize);
+        return new ECNQueue(speed, queuesize, *_eventlist, queueLogger, MultiFatTreeSwitch::_ecn_threshold_fraction * queuesize);
     case ECN_PRIO:
         return new ECNPrioQueue(speed, queuesize, queuesize,
-                                FatTreeSwitch::_ecn_threshold_fraction * queuesize,
-                                FatTreeSwitch::_ecn_threshold_fraction * queuesize,
+                                MultiFatTreeSwitch::_ecn_threshold_fraction * queuesize,
+                                MultiFatTreeSwitch::_ecn_threshold_fraction * queuesize,
                                 *_eventlist, queueLogger);
     case LOSSLESS:
         return new LosslessQueue(speed, queuesize, *_eventlist, queueLogger, NULL);
     case LOSSLESS_INPUT:
         return new LosslessOutputQueue(speed, queuesize, *_eventlist, queueLogger);
     case LOSSLESS_INPUT_ECN: 
-        return new LosslessOutputQueue(speed, queuesize*10, *_eventlist, queueLogger,1,FatTreeSwitch::_ecn_threshold_fraction * queuesize);
+        return new LosslessOutputQueue(speed, queuesize*10, *_eventlist, queueLogger,1,MultiFatTreeSwitch::_ecn_threshold_fraction * queuesize);
     case COMPOSITE_ECN:
         if (tor && dir == DOWNLINK) {
             CompositeQueue* q = new CompositeQueue(speed, queuesize, *_eventlist, queueLogger);
             q->setRTS(_rts);
             return q;
         } else {
-            return new ECNQueue(speed, queuesize, *_eventlist, queueLogger, FatTreeSwitch::_ecn_threshold_fraction * queuesize);
+            return new ECNQueue(speed, queuesize, *_eventlist, queueLogger, MultiFatTreeSwitch::_ecn_threshold_fraction * queuesize);
             // return new ECNQueue(speed, memFromPkt(2*SWITCH_BUFFER), *_eventlist, queueLogger, memFromPkt(15));
         }
     case COMPOSITE_ECN_DEF:
@@ -720,12 +763,12 @@ FatTreeTopology::alloc_queue(QueueLogger* queueLogger, linkspeed_bps speed, mem_
             q->setRTS(_rts);
             return q;
         } else {
-            // return new ECNQueue(speed, queuesize, *_eventlist, queueLogger, FatTreeSwitch::_ecn_threshold_fraction * queuesize);
+            // return new ECNQueue(speed, queuesize, *_eventlist, queueLogger, MultiFatTreeSwitch::_ecn_threshold_fraction * queuesize);
             return new ECNQueue(speed, memFromPkt(2*SWITCH_BUFFER), *_eventlist, queueLogger, memFromPkt(15));
         }
     case ECN_BIG:
         if (tor && dir == DOWNLINK) {
-            return new ECNQueue(speed, queuesize, *_eventlist, queueLogger, FatTreeSwitch::_ecn_threshold_fraction * queuesize);
+            return new ECNQueue(speed, queuesize, *_eventlist, queueLogger, MultiFatTreeSwitch::_ecn_threshold_fraction * queuesize);
         } else {
             return new ECNQueue(speed, memFromPkt(2*SWITCH_BUFFER), *_eventlist, queueLogger, memFromPkt(15));
         }
@@ -734,7 +777,7 @@ FatTreeTopology::alloc_queue(QueueLogger* queueLogger, linkspeed_bps speed, mem_
             CompositeQueue* q = new CompositeQueue(speed, queuesize, *_eventlist, queueLogger);
             if (!tor || dir == UPLINK) {
                 // don't use ECN on ToR downlinks
-                q->set_ecn_threshold(FatTreeSwitch::_ecn_threshold_fraction * queuesize);
+                q->set_ecn_threshold(MultiFatTreeSwitch::_ecn_threshold_fraction * queuesize);
             }
             q->setRTS(_rts);
             return q;
@@ -744,7 +787,7 @@ FatTreeTopology::alloc_queue(QueueLogger* queueLogger, linkspeed_bps speed, mem_
     }
 }
 
-void FatTreeTopology::init_network(){
+void MultiFatTreeTopology::init_network(){
     QueueLogger* queueLogger;
     if (_tiers == 3) {
         for (uint32_t j=0;j<NCORE;j++) {
@@ -786,15 +829,15 @@ void FatTreeTopology::init_network(){
     // changed to always create switches
     for (uint32_t j=0;j<NTOR;j++){
         simtime_picosec switch_latency = (_switch_latencies[TOR_TIER] > 0) ? _switch_latencies[TOR_TIER] : _switch_latency;
-        switches_lp[j] = new FatTreeSwitch(*_eventlist, "Switch_LowerPod_"+ntoa(j),FatTreeSwitch::TOR,j,switch_latency,this);
+        switches_lp[j] = new MultiFatTreeSwitch(*_eventlist, "Switch_LowerPod_"+ntoa(j),MultiFatTreeSwitch::TOR,j,switch_latency,this);
     }
     for (uint32_t j=0;j<NAGG;j++){
         simtime_picosec switch_latency = (_switch_latencies[AGG_TIER] > 0) ? _switch_latencies[AGG_TIER] : _switch_latency;
-        switches_up[j] = new FatTreeSwitch(*_eventlist, "Switch_UpperPod_"+ntoa(j), FatTreeSwitch::AGG,j,switch_latency,this);
+        switches_up[j] = new MultiFatTreeSwitch(*_eventlist, "Switch_UpperPod_"+ntoa(j), MultiFatTreeSwitch::AGG,j,switch_latency,this);
     }
     for (uint32_t j=0;j<NCORE;j++){
         simtime_picosec switch_latency = (_switch_latencies[CORE_TIER] > 0) ? _switch_latencies[CORE_TIER] : _switch_latency;
-        switches_c[j] = new FatTreeSwitch(*_eventlist, "Switch_Core_"+ntoa(j), FatTreeSwitch::CORE,j,switch_latency,this);
+        switches_c[j] = new MultiFatTreeSwitch(*_eventlist, "Switch_Core_"+ntoa(j), MultiFatTreeSwitch::CORE,j,switch_latency,this);
     }
       
     // links from lower layer pod switch to server
@@ -1023,8 +1066,8 @@ void FatTreeTopology::init_network(){
     }
 }
 
-void FatTreeTopology::add_failed_link(uint32_t type, uint32_t switch_id, uint32_t link_id){
-    assert(type == FatTreeSwitch::AGG);
+void MultiFatTreeTopology::add_failed_link(uint32_t type, uint32_t switch_id, uint32_t link_id){
+    assert(type == MultiFatTreeSwitch::AGG);
     assert(link_id < _radix_up[AGG_TIER]);
     assert(switch_id < NAGG);
     
@@ -1042,23 +1085,62 @@ void FatTreeTopology::add_failed_link(uint32_t type, uint32_t switch_id, uint32_
     pipes_nc_nup[k][switch_id][0] = NULL;
 }
 
-Route* FatTreeTopology::get_tor_route(uint32_t hostnum) {
+Route* MultiFatTreeTopology::get_tor_route(uint32_t hostnum) {
+    uint32_t local_hostnum = adjusted_host(hostnum);
     Route* torroute = new Route();
-    torroute->push_back(queues_ns_nlp[hostnum][HOST_POD_SWITCH(hostnum)][0]);
-    torroute->push_back(pipes_ns_nlp[hostnum][HOST_POD_SWITCH(hostnum)][0]);
-    torroute->push_back(queues_ns_nlp[hostnum][HOST_POD_SWITCH(hostnum)][0]->getRemoteEndpoint());
+    torroute->push_back(queues_ns_nlp[local_hostnum][HOST_POD_SWITCH(local_hostnum)][0]);
+    torroute->push_back(pipes_ns_nlp[local_hostnum][HOST_POD_SWITCH(local_hostnum)][0]);
+    torroute->push_back(queues_ns_nlp[local_hostnum][HOST_POD_SWITCH(local_hostnum)][0]->getRemoteEndpoint());
     return torroute;
 }
 
-void FatTreeTopology::add_host_port(uint32_t hostnum, flowid_t flow_id, PacketSink* host) {
-    assert(switches_lp[HOST_POD_SWITCH(hostnum)]);
-    switches_lp[HOST_POD_SWITCH(hostnum)]->addHostPort(hostnum,flow_id,host);
+void MultiFatTreeTopology::add_host_port(uint32_t hostnum, flowid_t flow_id, PacketSink* host) {
+    uint32_t local_hostnum = adjusted_host(hostnum);
+    assert(switches_lp[HOST_POD_SWITCH(local_hostnum)]);
+    switches_lp[HOST_POD_SWITCH(local_hostnum)]->addHostPort(hostnum,flow_id,host);
 }
 
-vector<const Route*>* FatTreeTopology::get_bidir_paths(uint32_t src, uint32_t dest, bool reverse){
+vector<const Route*>* MultiFatTreeTopology::get_bidir_paths(uint32_t src, uint32_t dest, bool reverse){
     vector<const Route*>* paths = new vector<const Route*>();
 
     route_t *routeout, *routeback;
+    
+    // Convert global host IDs to local host IDs if host offset is set
+    uint32_t local_src = adjusted_host(src);
+    
+    // For inter-DC traffic, we should NOT adjust the destination host ID
+    // because it's not in the current datacenter
+    uint32_t local_dest = dest; // Keep original dest for inter-DC traffic
+    
+    // Check if this is inter-DC traffic BEFORE calling adjusted_host on dest
+    bool is_inter_dc = false;
+    if (dest >= _host_id_offset + _no_of_nodes || dest < _host_id_offset) {
+        // Destination is outside this datacenter - this is inter-DC traffic
+        is_inter_dc = true;
+        // std::cout << "  FatTree: Inter-DC traffic detected. Dest host " << dest << " is outside local DC" << std::endl;
+        // std::cout << "  FatTree: Global dest=" << dest << ", host_offset=" << _host_id_offset << ", max_local=" << (_host_id_offset + _no_of_nodes - 1) << std::endl;
+    } else {
+        // Destination is within this datacenter - use adjusted host ID
+        local_dest = adjusted_host(dest);
+    }
+    
+    // Safety check for host ID overflow (should not happen with the fix above)
+    if (local_dest > dest && _host_id_offset > 0 && !is_inter_dc) {
+        std::cout << "  FatTree: Host ID overflow detected - dest=" << dest << ", local_dest=" << local_dest 
+                  << ", host_offset=" << _host_id_offset << std::endl;
+        std::cout << "  FatTree: This indicates the destination is in a different datacenter" << std::endl;
+    }
+    
+    // std::cout << "  FatTree: global src=" << src << " dest=" << dest 
+    //           << " local src=" << local_src << " dest=" << local_dest 
+    //           << " max_nodes=" << _no_of_nodes << " host_offset=" << _host_id_offset << std::endl;
+    
+    // Validate that the source is within the local datacenter
+    if (local_src >= _no_of_nodes) {
+        std::cerr << "ERROR: Source host ID out of range. src=" << src << " (local=" << local_src 
+                  << "), max=" << _no_of_nodes << std::endl;
+        return paths;
+    }
   
     //QueueLoggerSimple *simplequeuelogger = new QueueLoggerSimple();
     //QueueLoggerSimple *simplequeuelogger = 0;
@@ -1066,31 +1148,188 @@ vector<const Route*>* FatTreeTopology::get_bidir_paths(uint32_t src, uint32_t de
     //Queue* pqueue = new Queue(_linkspeed, memFromPkt(FEEDER_BUFFER), *_eventlist, simplequeuelogger);
     //pqueue->setName("PQueue_" + ntoa(src) + "_" + ntoa(dest));
     //logfile->writeName(*pqueue);
-    if (HOST_POD_SWITCH(src)==HOST_POD_SWITCH(dest)){
+    
+    // Handle inter-DC routing
+    if (is_inter_dc) {
+        // std::cout << "  FatTree: Creating inter-DC route to WAN switch" << std::endl;
+        
+        // Safety check: ensure we have a valid source host
+        if (local_src >= _no_of_nodes) {
+            std::cerr << "  FatTree: ERROR - Invalid source host for inter-DC routing" << std::endl;
+            return paths;
+        }
+        
+        // For inter-DC traffic, route to the WAN switch
+        // We need to go up through the FatTree hierarchy to reach the WAN switch
+        routeout = new Route();
+        
+        // Start from source host to TOR
+        if (!queues_ns_nlp[local_src][HOST_POD_SWITCH(local_src)][0]) {
+            std::cerr << "  FatTree: ERROR - NULL queue from host " << local_src << " to TOR switch" << std::endl;
+            delete routeout;
+            return paths;
+        }
+        routeout->push_back(queues_ns_nlp[local_src][HOST_POD_SWITCH(local_src)][0]);
+        
+        if (!pipes_ns_nlp[local_src][HOST_POD_SWITCH(local_src)][0]) {
+            std::cerr << "  FatTree: ERROR - NULL pipe from host " << local_src << " to TOR switch" << std::endl;
+            delete routeout;
+            return paths;
+        }
+        routeout->push_back(pipes_ns_nlp[local_src][HOST_POD_SWITCH(local_src)][0]);
+        
+        if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN) {
+            PacketSink* remote = queues_ns_nlp[local_src][HOST_POD_SWITCH(local_src)][0]->getRemoteEndpoint();
+            if (!remote) {
+                std::cerr << "  FatTree: ERROR - NULL remote endpoint from host " << local_src << " to TOR switch" << std::endl;
+                delete routeout;
+                return paths;
+            }
+            routeout->push_back(remote);
+        }
+        
+        // Go up to AGG switch
+        uint32_t pod = HOST_POD(local_src);
+        uint32_t agg_switch = MIN_POD_AGG_SWITCH(pod);
+        
+        // std::cout << "  FatTree: Host " << local_src << " in pod " << pod << ", TOR switch " << HOST_POD_SWITCH(local_src) << ", AGG switch " << agg_switch << std::endl;
+        
+        if (!queues_nlp_nup[HOST_POD_SWITCH(local_src)][agg_switch][0]) {
+            std::cerr << "  FatTree: ERROR - NULL queue from TOR " << HOST_POD_SWITCH(local_src) << " to AGG " << agg_switch << std::endl;
+            std::cerr << "  FatTree: This suggests the TOR-AGG connection was not properly initialized" << std::endl;
+            delete routeout;
+            return paths;
+        }
+        routeout->push_back(queues_nlp_nup[HOST_POD_SWITCH(local_src)][agg_switch][0]);
+        
+        if (!pipes_nlp_nup[HOST_POD_SWITCH(local_src)][agg_switch][0]) {
+            std::cerr << "  FatTree: ERROR - NULL pipe from TOR to AGG switch" << std::endl;
+            delete routeout;
+            return paths;
+        }
+        routeout->push_back(pipes_nlp_nup[HOST_POD_SWITCH(local_src)][agg_switch][0]);
+        
+        if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN) {
+            PacketSink* remote = queues_nlp_nup[HOST_POD_SWITCH(local_src)][agg_switch][0]->getRemoteEndpoint();
+            if (!remote) {
+                std::cerr << "  FatTree: ERROR - NULL remote endpoint from TOR to AGG switch" << std::endl;
+                delete routeout;
+                return paths;
+            }
+            routeout->push_back(remote);
+        }
+        
+        // Go up to CORE switch
+        // For inter-DC routing, we need to find a valid CORE switch that this AGG switch connects to
+        uint32_t core_switch = 0;
+        bool found_core = false;
+        
+        // Find the first valid CORE switch that this AGG switch connects to
+        uint32_t podpos = agg_switch % _agg_switches_per_pod;
+        for (uint32_t l = 0; l < _radix_up[AGG_TIER]/_bundlesize[CORE_TIER]; l++) {
+            uint32_t candidate_core = podpos + _agg_switches_per_pod * l;
+            if (candidate_core < NCORE && queues_nup_nc[agg_switch][candidate_core][0] != NULL) {
+                core_switch = candidate_core;
+                found_core = true;
+                break;
+            }
+        }
+        
+        if (!found_core) {
+            std::cerr << "  FatTree: ERROR - No valid CORE switch found for AGG " << agg_switch << std::endl;
+            std::cerr << "  FatTree: AGG switch " << agg_switch << " has no valid CORE connections" << std::endl;
+            delete routeout;
+            return paths;
+        }
+        
+        // std::cout << "  FatTree: AGG switch " << agg_switch << " to CORE switch " << core_switch << std::endl;
+        // std::cout << "  FatTree: queues_nup_nc size: [" << queues_nup_nc.size() << "][" << queues_nup_nc[0].size() << "][" << queues_nup_nc[0][0].size() << "]" << std::endl;
+        routeout->push_back(queues_nup_nc[agg_switch][core_switch][0]);
+        
+        if (!pipes_nup_nc[agg_switch][core_switch][0]) {
+            std::cerr << "  FatTree: ERROR - NULL pipe from AGG to CORE switch" << std::endl;
+            delete routeout;
+            return paths;
+        }
+        routeout->push_back(pipes_nup_nc[agg_switch][core_switch][0]);
+        
+        if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN) {
+            PacketSink* remote = queues_nup_nc[agg_switch][core_switch][0]->getRemoteEndpoint();
+            if (!remote) {
+                std::cerr << "  FatTree: ERROR - NULL remote endpoint from AGG to CORE switch" << std::endl;
+                delete routeout;
+                return paths;
+            }
+            routeout->push_back(remote);
+        }
+        
+        // Finally, route to WAN switch
+        if (_wan_switch) {
+            // Additional safety check for WAN switch
+            if (dynamic_cast<PacketSink*>(_wan_switch) == nullptr) {
+                std::cerr << "  FatTree: ERROR - WAN switch is not a valid PacketSink!" << std::endl;
+                delete routeout;
+                return paths;
+            }
+            routeout->push_back(_wan_switch);
+            // std::cout << "  FatTree: Added WAN switch to route" << std::endl;
+        } else {
+            std::cerr << "  FatTree: ERROR - No WAN switch connected!" << std::endl;
+            delete routeout;
+            return paths;
+        }
+        
+        // Validate the route before adding it
+        if (routeout->size() == 0) {
+            std::cerr << "  FatTree: ERROR - Created empty route!" << std::endl;
+            delete routeout;
+            return paths;
+        }
+        
+        // Validate that the route ends at a WAN switch (not a local host)
+        if (routeout->size() > 0) {
+            PacketSink* last_element = dynamic_cast<PacketSink*>(routeout->at(routeout->size() - 1));
+            if (last_element) {
+                MultiFatTreeSwitch* last_switch = dynamic_cast<MultiFatTreeSwitch*>(last_element);
+                if (last_switch && last_switch->getType() == MultiFatTreeSwitch::WAN) {
+                    // std::cout << "  FatTree: Route ends at WAN switch (correct)" << std::endl;
+                } else {
+                    // std::cout << "  FatTree: Route ends at non-WAN element (unexpected)" << std::endl;
+                }
+            }
+        }
+        
+        paths->push_back(routeout);
+        check_non_null(routeout);
+        // std::cout << "  FatTree: Created inter-DC route with " << routeout->size() << " elements" << std::endl;
+        return paths;
+    }
+    
+    if (HOST_POD_SWITCH(local_src)==HOST_POD_SWITCH(local_dest)){
   
         // forward path
         routeout = new Route();
         //routeout->push_back(pqueue);
-        routeout->push_back(queues_ns_nlp[src][HOST_POD_SWITCH(src)][0]);
-        routeout->push_back(pipes_ns_nlp[src][HOST_POD_SWITCH(src)][0]);
+        routeout->push_back(queues_ns_nlp[local_src][HOST_POD_SWITCH(local_src)][0]);
+        routeout->push_back(pipes_ns_nlp[local_src][HOST_POD_SWITCH(local_src)][0]);
 
         if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-            routeout->push_back(queues_ns_nlp[src][HOST_POD_SWITCH(src)][0]->getRemoteEndpoint());
+            routeout->push_back(queues_ns_nlp[local_src][HOST_POD_SWITCH(local_src)][0]->getRemoteEndpoint());
 
-        routeout->push_back(queues_nlp_ns[HOST_POD_SWITCH(dest)][dest][0]);
-        routeout->push_back(pipes_nlp_ns[HOST_POD_SWITCH(dest)][dest][0]);
+        routeout->push_back(queues_nlp_ns[HOST_POD_SWITCH(local_dest)][local_dest][0]);
+        routeout->push_back(pipes_nlp_ns[HOST_POD_SWITCH(local_dest)][local_dest][0]);
 
         if (reverse) {
             // reverse path for RTS packets
             routeback = new Route();
-            routeback->push_back(queues_ns_nlp[dest][HOST_POD_SWITCH(dest)][0]);
-            routeback->push_back(pipes_ns_nlp[dest][HOST_POD_SWITCH(dest)][0]);
+            routeback->push_back(queues_ns_nlp[local_dest][HOST_POD_SWITCH(local_dest)][0]);
+            routeback->push_back(pipes_ns_nlp[local_dest][HOST_POD_SWITCH(local_dest)][0]);
 
             if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                routeback->push_back(queues_ns_nlp[dest][HOST_POD_SWITCH(dest)][0]->getRemoteEndpoint());
+                routeback->push_back(queues_ns_nlp[local_dest][HOST_POD_SWITCH(local_dest)][0]->getRemoteEndpoint());
 
-            routeback->push_back(queues_nlp_ns[HOST_POD_SWITCH(src)][src][0]);
-            routeback->push_back(pipes_nlp_ns[HOST_POD_SWITCH(src)][src][0]);
+            routeback->push_back(queues_nlp_ns[HOST_POD_SWITCH(local_src)][local_src][0]);
+            routeback->push_back(pipes_nlp_ns[HOST_POD_SWITCH(local_src)][local_src][0]);
 
             routeout->set_reverse(routeback);
             routeback->set_reverse(routeout);
@@ -1103,10 +1342,10 @@ vector<const Route*>* FatTreeTopology::get_bidir_paths(uint32_t src, uint32_t de
         //cout << "pathcount " << paths->size() << endl;
         return paths;
     }
-    else if (HOST_POD(src)==HOST_POD(dest)){
+    else if (HOST_POD(local_src)==HOST_POD(local_dest)){
         //don't go up the hierarchy, stay in the pod only.
 
-        uint32_t pod = HOST_POD(src);
+        uint32_t pod = HOST_POD(local_src);
         //there are K/2 paths between the source and the destination  <- this is no longer true for bundles
         if (_tiers == 2) {
             // xxx sanity check for debugging, remove later.
@@ -1123,51 +1362,51 @@ vector<const Route*>* FatTreeTopology::get_bidir_paths(uint32_t src, uint32_t de
       
                     routeout = new Route();
       
-                    routeout->push_back(queues_ns_nlp[src][HOST_POD_SWITCH(src)][0]);
-                    routeout->push_back(pipes_ns_nlp[src][HOST_POD_SWITCH(src)][0]);
+                    routeout->push_back(queues_ns_nlp[local_src][HOST_POD_SWITCH(local_src)][0]);
+                    routeout->push_back(pipes_ns_nlp[local_src][HOST_POD_SWITCH(local_src)][0]);
 
                     if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                        routeout->push_back(queues_ns_nlp[src][HOST_POD_SWITCH(src)][0]->getRemoteEndpoint());
+                        routeout->push_back(queues_ns_nlp[local_src][HOST_POD_SWITCH(local_src)][0]->getRemoteEndpoint());
 
-                    routeout->push_back(queues_nlp_nup[HOST_POD_SWITCH(src)][upper][b_up]);
-                    routeout->push_back(pipes_nlp_nup[HOST_POD_SWITCH(src)][upper][b_up]);
-
-                    if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                        routeout->push_back(queues_nlp_nup[HOST_POD_SWITCH(src)][upper][b_up]->getRemoteEndpoint());
-
-                    routeout->push_back(queues_nup_nlp[upper][HOST_POD_SWITCH(dest)][b_down]);
-                    routeout->push_back(pipes_nup_nlp[upper][HOST_POD_SWITCH(dest)][b_down]);
+                    routeout->push_back(queues_nlp_nup[HOST_POD_SWITCH(local_src)][upper][b_up]);
+                    routeout->push_back(pipes_nlp_nup[HOST_POD_SWITCH(local_src)][upper][b_up]);
 
                     if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                        routeout->push_back(queues_nup_nlp[upper][HOST_POD_SWITCH(dest)][b_down]->getRemoteEndpoint());
+                        routeout->push_back(queues_nlp_nup[HOST_POD_SWITCH(local_src)][upper][b_up]->getRemoteEndpoint());
 
-                    routeout->push_back(queues_nlp_ns[HOST_POD_SWITCH(dest)][dest][0]);
-                    routeout->push_back(pipes_nlp_ns[HOST_POD_SWITCH(dest)][dest][0]);
+                    routeout->push_back(queues_nup_nlp[upper][HOST_POD_SWITCH(local_dest)][b_down]);
+                    routeout->push_back(pipes_nup_nlp[upper][HOST_POD_SWITCH(local_dest)][b_down]);
+
+                    if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
+                        routeout->push_back(queues_nup_nlp[upper][HOST_POD_SWITCH(local_dest)][b_down]->getRemoteEndpoint());
+
+                    routeout->push_back(queues_nlp_ns[HOST_POD_SWITCH(local_dest)][local_dest][0]);
+                    routeout->push_back(pipes_nlp_ns[HOST_POD_SWITCH(local_dest)][local_dest][0]);
 
                     if (reverse) {
                         // reverse path for RTS packets
                         routeback = new Route();
       
-                        routeback->push_back(queues_ns_nlp[dest][HOST_POD_SWITCH(dest)][0]);
-                        routeback->push_back(pipes_ns_nlp[dest][HOST_POD_SWITCH(dest)][0]);
+                        routeback->push_back(queues_ns_nlp[local_dest][HOST_POD_SWITCH(local_dest)][0]);
+                        routeback->push_back(pipes_ns_nlp[local_dest][HOST_POD_SWITCH(local_dest)][0]);
 
                         if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                            routeback->push_back(queues_ns_nlp[dest][HOST_POD_SWITCH(dest)][0]->getRemoteEndpoint());
+                            routeback->push_back(queues_ns_nlp[local_dest][HOST_POD_SWITCH(local_dest)][0]->getRemoteEndpoint());
 
-                        routeback->push_back(queues_nlp_nup[HOST_POD_SWITCH(dest)][upper][b_down]);
-                        routeback->push_back(pipes_nlp_nup[HOST_POD_SWITCH(dest)][upper][b_down]);
-
-                        if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                            routeback->push_back(queues_nlp_nup[HOST_POD_SWITCH(dest)][upper][b_down]->getRemoteEndpoint());
-
-                        routeback->push_back(queues_nup_nlp[upper][HOST_POD_SWITCH(src)][b_up]);
-                        routeback->push_back(pipes_nup_nlp[upper][HOST_POD_SWITCH(src)][b_up]);
+                        routeback->push_back(queues_nlp_nup[HOST_POD_SWITCH(local_dest)][upper][b_down]);
+                        routeback->push_back(pipes_nlp_nup[HOST_POD_SWITCH(local_dest)][upper][b_down]);
 
                         if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                            routeback->push_back(queues_nup_nlp[upper][HOST_POD_SWITCH(src)][b_up]->getRemoteEndpoint());
+                            routeback->push_back(queues_nlp_nup[HOST_POD_SWITCH(local_dest)][upper][b_down]->getRemoteEndpoint());
+
+                        routeback->push_back(queues_nup_nlp[upper][HOST_POD_SWITCH(local_src)][b_up]);
+                        routeback->push_back(pipes_nup_nlp[upper][HOST_POD_SWITCH(local_src)][b_up]);
+
+                        if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
+                            routeback->push_back(queues_nup_nlp[upper][HOST_POD_SWITCH(local_src)][b_up]->getRemoteEndpoint());
       
-                        routeback->push_back(queues_nlp_ns[HOST_POD_SWITCH(src)][src][0]);
-                        routeback->push_back(pipes_nlp_ns[HOST_POD_SWITCH(src)][src][0]);
+                        routeback->push_back(queues_nlp_ns[HOST_POD_SWITCH(local_src)][local_src][0]);
+                        routeback->push_back(pipes_nlp_ns[HOST_POD_SWITCH(local_src)][local_src][0]);
 
                         routeout->set_reverse(routeback);
                         routeback->set_reverse(routeout);
@@ -1183,7 +1422,7 @@ vector<const Route*>* FatTreeTopology::get_bidir_paths(uint32_t src, uint32_t de
         return paths;
     } else {
         assert(_tiers == 3);
-        uint32_t pod = HOST_POD(src);
+        uint32_t pod = HOST_POD(local_src);
 
         for (uint32_t upper = MIN_POD_AGG_SWITCH(pod); upper <= MAX_POD_AGG_SWITCH(pod); upper++) {
             uint32_t podpos = upper % _agg_switches_per_pod;
@@ -1204,17 +1443,17 @@ vector<const Route*>* FatTreeTopology::get_bidir_paths(uint32_t src, uint32_t de
                                 routeout = new Route();
                                 //routeout->push_back(pqueue);
         
-                                routeout->push_back(queues_ns_nlp[src][HOST_POD_SWITCH(src)][0]);
-                                routeout->push_back(pipes_ns_nlp[src][HOST_POD_SWITCH(src)][0]);
+                                routeout->push_back(queues_ns_nlp[local_src][HOST_POD_SWITCH(local_src)][0]);
+                                routeout->push_back(pipes_ns_nlp[local_src][HOST_POD_SWITCH(local_src)][0]);
 
                                 if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                                    routeout->push_back(queues_ns_nlp[src][HOST_POD_SWITCH(src)][0]->getRemoteEndpoint());
+                                    routeout->push_back(queues_ns_nlp[local_src][HOST_POD_SWITCH(local_src)][0]->getRemoteEndpoint());
         
-                                routeout->push_back(queues_nlp_nup[HOST_POD_SWITCH(src)][upper][b1_up]);
-                                routeout->push_back(pipes_nlp_nup[HOST_POD_SWITCH(src)][upper][b1_up]);
+                                routeout->push_back(queues_nlp_nup[HOST_POD_SWITCH(local_src)][upper][b1_up]);
+                                routeout->push_back(pipes_nlp_nup[HOST_POD_SWITCH(local_src)][upper][b1_up]);
 
                                 if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                                    routeout->push_back(queues_nlp_nup[HOST_POD_SWITCH(src)][upper][b1_up]->getRemoteEndpoint());
+                                    routeout->push_back(queues_nlp_nup[HOST_POD_SWITCH(local_src)][upper][b1_up]->getRemoteEndpoint());
         
                                 routeout->push_back(queues_nup_nc[upper][core][b2_up]);
                                 routeout->push_back(pipes_nup_nc[upper][core][b2_up]);
@@ -1224,8 +1463,8 @@ vector<const Route*>* FatTreeTopology::get_bidir_paths(uint32_t src, uint32_t de
         
                                 //now take the only link down to the destination server!
         
-                                uint32_t upper2 = MIN_POD_AGG_SWITCH(HOST_POD(dest)) + core % _agg_switches_per_pod;
-                                //printf("K %d HOST_POD(%d) %d core %d upper2 %d\n",K,dest,HOST_POD(dest),core, upper2);
+                                uint32_t upper2 = MIN_POD_AGG_SWITCH(HOST_POD(local_dest)) + core % _agg_switches_per_pod;
+                                //printf("K %d HOST_POD(%d) %d core %d upper2 %d\n",K,local_dest,HOST_POD(local_dest),core, upper2);
         
                                 routeout->push_back(queues_nc_nup[core][upper2][b2_down]);
                                 routeout->push_back(pipes_nc_nup[core][upper2][b2_down]);
@@ -1233,30 +1472,30 @@ vector<const Route*>* FatTreeTopology::get_bidir_paths(uint32_t src, uint32_t de
                                 if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
                                     routeout->push_back(queues_nc_nup[core][upper2][b2_down]->getRemoteEndpoint());        
 
-                                routeout->push_back(queues_nup_nlp[upper2][HOST_POD_SWITCH(dest)][b1_down]);
-                                routeout->push_back(pipes_nup_nlp[upper2][HOST_POD_SWITCH(dest)][b1_down]);
+                                routeout->push_back(queues_nup_nlp[upper2][HOST_POD_SWITCH(local_dest)][b1_down]);
+                                routeout->push_back(pipes_nup_nlp[upper2][HOST_POD_SWITCH(local_dest)][b1_down]);
 
                                 if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                                    routeout->push_back(queues_nup_nlp[upper2][HOST_POD_SWITCH(dest)][b1_down]->getRemoteEndpoint());
+                                    routeout->push_back(queues_nup_nlp[upper2][HOST_POD_SWITCH(local_dest)][b1_down]->getRemoteEndpoint());
         
-                                routeout->push_back(queues_nlp_ns[HOST_POD_SWITCH(dest)][dest][0]);
-                                routeout->push_back(pipes_nlp_ns[HOST_POD_SWITCH(dest)][dest][0]);
+                                routeout->push_back(queues_nlp_ns[HOST_POD_SWITCH(local_dest)][local_dest][0]);
+                                routeout->push_back(pipes_nlp_ns[HOST_POD_SWITCH(local_dest)][local_dest][0]);
 
                                 if (reverse) {
                                     // reverse path for RTS packets
                                     routeback = new Route();
         
-                                    routeback->push_back(queues_ns_nlp[dest][HOST_POD_SWITCH(dest)][0]);
-                                    routeback->push_back(pipes_ns_nlp[dest][HOST_POD_SWITCH(dest)][0]);
+                                    routeback->push_back(queues_ns_nlp[local_dest][HOST_POD_SWITCH(local_dest)][0]);
+                                    routeback->push_back(pipes_ns_nlp[local_dest][HOST_POD_SWITCH(local_dest)][0]);
 
                                     if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                                        routeback->push_back(queues_ns_nlp[dest][HOST_POD_SWITCH(dest)][0]->getRemoteEndpoint());
+                                        routeback->push_back(queues_ns_nlp[local_dest][HOST_POD_SWITCH(local_dest)][0]->getRemoteEndpoint());
         
-                                    routeback->push_back(queues_nlp_nup[HOST_POD_SWITCH(dest)][upper2][b1_down]);
-                                    routeback->push_back(pipes_nlp_nup[HOST_POD_SWITCH(dest)][upper2][b1_down]);
+                                    routeback->push_back(queues_nlp_nup[HOST_POD_SWITCH(local_dest)][upper2][b1_down]);
+                                    routeback->push_back(pipes_nlp_nup[HOST_POD_SWITCH(local_dest)][upper2][b1_down]);
 
                                     if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                                        routeback->push_back(queues_nlp_nup[HOST_POD_SWITCH(dest)][upper2][b1_down]->getRemoteEndpoint());
+                                        routeback->push_back(queues_nlp_nup[HOST_POD_SWITCH(local_dest)][upper2][b1_down]->getRemoteEndpoint());
         
                                     routeback->push_back(queues_nup_nc[upper2][core][b2_down]);
                                     routeback->push_back(pipes_nup_nc[upper2][core][b2_down]);
@@ -1272,14 +1511,14 @@ vector<const Route*>* FatTreeTopology::get_bidir_paths(uint32_t src, uint32_t de
                                     if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
                                         routeback->push_back(queues_nc_nup[core][upper][b2_up]->getRemoteEndpoint());
         
-                                    routeback->push_back(queues_nup_nlp[upper][HOST_POD_SWITCH(src)][b1_up]);
-                                    routeback->push_back(pipes_nup_nlp[upper][HOST_POD_SWITCH(src)][b1_up]);
+                                    routeback->push_back(queues_nup_nlp[upper][HOST_POD_SWITCH(local_src)][b1_up]);
+                                    routeback->push_back(pipes_nup_nlp[upper][HOST_POD_SWITCH(local_src)][b1_up]);
 
                                     if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                                        routeback->push_back(queues_nup_nlp[upper][HOST_POD_SWITCH(src)][b1_up]->getRemoteEndpoint());
+                                        routeback->push_back(queues_nup_nlp[upper][HOST_POD_SWITCH(local_src)][b1_up]->getRemoteEndpoint());
         
-                                    routeback->push_back(queues_nlp_ns[HOST_POD_SWITCH(src)][src][0]);
-                                    routeback->push_back(pipes_nlp_ns[HOST_POD_SWITCH(src)][src][0]);
+                                    routeback->push_back(queues_nlp_ns[HOST_POD_SWITCH(local_src)][local_src][0]);
+                                    routeback->push_back(pipes_nlp_ns[HOST_POD_SWITCH(local_src)][local_src][0]);
 
 
                                     routeout->set_reverse(routeback);
@@ -1300,7 +1539,7 @@ vector<const Route*>* FatTreeTopology::get_bidir_paths(uint32_t src, uint32_t de
     }
 }
 
-void FatTreeTopology::count_queue(Queue* queue){
+void MultiFatTreeTopology::count_queue(Queue* queue){
     if (_link_usage.find(queue)==_link_usage.end()){
         _link_usage[queue] = 0;
     }
@@ -1308,7 +1547,7 @@ void FatTreeTopology::count_queue(Queue* queue){
     _link_usage[queue] = _link_usage[queue] + 1;
 }
 
-int64_t FatTreeTopology::find_lp_switch(Queue* queue){
+int64_t MultiFatTreeTopology::find_lp_switch(Queue* queue){
     //first check ns_nlp
     for (uint32_t srv=0;srv<NSRV;srv++)
         for (uint32_t tor = 0; tor < NTOR; tor++)
@@ -1328,7 +1567,7 @@ int64_t FatTreeTopology::find_lp_switch(Queue* queue){
     return -1;
 }
 
-int64_t FatTreeTopology::find_up_switch(Queue* queue){
+int64_t MultiFatTreeTopology::find_up_switch(Queue* queue){
     count_queue(queue);
     //first check nc_nup
     for (uint32_t core=0; core < NCORE; core++)
@@ -1349,7 +1588,7 @@ int64_t FatTreeTopology::find_up_switch(Queue* queue){
     return -1;
 }
 
-int64_t FatTreeTopology::find_core_switch(Queue* queue){
+int64_t MultiFatTreeTopology::find_core_switch(Queue* queue){
     count_queue(queue);
     //first check nup_nc
     for (uint32_t agg=0;agg<NAGG;agg++)
@@ -1362,7 +1601,7 @@ int64_t FatTreeTopology::find_core_switch(Queue* queue){
     return -1;
 }
 
-int64_t FatTreeTopology::find_destination(Queue* queue){
+int64_t MultiFatTreeTopology::find_destination(Queue* queue){
     //first check nlp_ns
     for (uint32_t tor=0; tor<NTOR; tor++)
         for (uint32_t srv = 0; srv<NSRV; srv++)
@@ -1372,7 +1611,7 @@ int64_t FatTreeTopology::find_destination(Queue* queue){
     return -1;
 }
 
-void FatTreeTopology::print_path(std::ofstream &paths,uint32_t src,const Route* route){
+void MultiFatTreeTopology::print_path(std::ofstream &paths,uint32_t src,const Route* route){
     paths << "SRC_" << src << " ";
   
     if (route->size()/2==2){
@@ -1397,7 +1636,7 @@ void FatTreeTopology::print_path(std::ofstream &paths,uint32_t src,const Route* 
     paths << endl;
 }
 
-void FatTreeTopology::add_switch_loggers(Logfile& log, simtime_picosec sample_period) {
+void MultiFatTreeTopology::add_switch_loggers(Logfile& log, simtime_picosec sample_period) {
     for (uint32_t i = 0; i < NTOR; i++) {
         switches_lp[i]->add_logger(log, sample_period);
     }

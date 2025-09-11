@@ -44,7 +44,7 @@
 # done
 
 # ECMP
-for i in {1..10}
+for i in {1..1}
 do
     ./htsim_consterase -end 0 -tm ./connection_matrices/alltoall_128n_2MB.cm -nodes 128 -strat ecmp -of ../../results/opt-4-2/baseline-coding/subflows2-ecmp/opt-ata-128n-2MB-sf2-ecmp-${i}.csv -ratecoef 0.9 -subflows 2
 done

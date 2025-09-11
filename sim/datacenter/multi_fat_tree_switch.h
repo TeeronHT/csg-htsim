@@ -1,12 +1,11 @@
 // -*- c-basic-offset: 4; indent-tabs-mode: nil -*-
-#ifndef _FATTREESWITCH_H
-#define _FATTREESWITCH_H
+#ifndef _MULTIFATTREESWITCH_H
+#define _MULTIFATTREESWITCH_H
 
 #include "switch.h"
 #include "callback_pipe.h"
+#include "multi_fat_tree_topology.h"
 #include <unordered_map>
-
-class FatTreeTopology;
 
 /*
  * Copyright (C) 2013-2014 Universita` di Pisa. All rights reserved.
@@ -59,32 +58,12 @@ class FatTreeTopology;
         c -= a; c -= b; c ^= (b >> 15);         \
     } while (/*CONSTCOND*/0)
 
-static inline uint32_t freeBSDHash(uint32_t target1, uint32_t target2 = 0, uint32_t target3 = 0)
-{
-    uint32_t a = 0x9e3779b9, b = 0x9e3779b9, c = 0; // hask key
-        
-    b += target3;
-    c += target2;
-    a += target1;        
-    MIX(a, b, c);
-    return c;
-}
+class FlowletInfo; // Forward declaration
 
-#undef MIX
-
-class FlowletInfo {
-public:
-    uint32_t _egress;
-    simtime_picosec _last;
-
-    FlowletInfo(uint32_t egress,simtime_picosec lasttime) {_egress = egress; _last = lasttime;};
-
-};
-
-class FatTreeSwitch : public Switch {
+class MultiFatTreeSwitch : public Switch {
 public:
     enum switch_type {
-        NONE = 0, TOR = 1, AGG = 2, CORE = 3
+        NONE = 0, TOR = 1, AGG = 2, CORE = 3, WAN = 4
     };
 
     enum routing_strategy {
@@ -95,7 +74,7 @@ public:
         PER_PACKET = 0, PER_FLOWLET = 1
     };
 
-    FatTreeSwitch(EventList& eventlist, string s, switch_type t, uint32_t id,simtime_picosec switch_delay, FatTreeTopology* ft);
+    MultiFatTreeSwitch(EventList& eventlist, string s, switch_type t, uint32_t id,simtime_picosec switch_delay, MultiFatTreeTopology* ft);
   
     virtual void receivePacket(Packet& pkt);
     virtual Route* getNextHop(Packet& pkt, BaseQueue* ingress_port);
@@ -124,6 +103,20 @@ public:
     static void set_ar_fraction(uint16_t f) { assert(f>=1);_ar_fraction = f;} 
     static void set_ar_sticky(uint16_t v) { _ar_sticky = v;} 
 
+    // Multi-DC specific methods
+    void set_dc_id(uint32_t dc_id) { _dc_id = dc_id; }
+    uint32_t get_dc_id() const { return _dc_id; }
+    void set_total_dcs(uint32_t total_dcs) { _total_dcs = total_dcs; }
+    uint32_t get_total_dcs() const { return _total_dcs; }
+    void set_nodes_per_dc(uint32_t nodes_per_dc) { _nodes_per_dc = nodes_per_dc; }
+    uint32_t get_nodes_per_dc() const { return _nodes_per_dc; }
+    
+    // Helper to check if traffic is inter-DC
+    bool is_inter_dc_traffic(uint32_t dest_host) const;
+    
+    // Public method to add routes to FIB (for WAN switches)
+    void add_wan_route(uint32_t dest_host, Route* route);
+
     static routing_strategy _strategy;
     static uint16_t _ar_fraction;
     static uint16_t _ar_sticky;
@@ -133,7 +126,12 @@ public:
 private:
     switch_type _type;
     Pipe* _pipe;
-    FatTreeTopology* _ft;
+    MultiFatTreeTopology* _ft;
+    
+    // Multi-DC specific fields
+    uint32_t _dc_id;
+    uint32_t _total_dcs;
+    uint32_t _nodes_per_dc;
     
     //CAREFUL: can't always have a single FIB for all up destinations when there are failures!
     vector<FibEntry*>* _uproutes;

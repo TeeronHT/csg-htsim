@@ -1,8 +1,8 @@
 #ifndef MULTI_DATACENTER_TOPOLOGY_H
 #define MULTI_DATACENTER_TOPOLOGY_H
 
-#include "fat_tree_topology.h"
-#include "fat_tree_switch.h"
+#include "multi_fat_tree_topology.h"
+#include "multi_fat_tree_switch.h"
 #include "queue.h"
 #include "pipe.h"
 #include "route.h"
@@ -31,7 +31,7 @@ public:
     bool is_inter_dc_flow(uint32_t src, uint32_t dest) const;
     
     // Get individual datacenter topologies
-    FatTreeTopology* get_datacenter(uint32_t dc_id) const;
+    MultiFatTreeTopology* get_datacenter(uint32_t dc_id) const;
     
     // WAN routing methods
     Route* get_wan_route(uint32_t src_dc, uint32_t dest_dc, uint32_t src_host, uint32_t dest_host);
@@ -57,10 +57,10 @@ private:
     EventList* _eventlist;
     
     // Individual datacenter topologies
-    std::vector<FatTreeTopology*> _datacenters;
+    std::vector<MultiFatTreeTopology*> _datacenters;
     
     // WAN switches (one per datacenter)
-    std::vector<FatTreeSwitch*> _wan_switches;
+    std::vector<MultiFatTreeSwitch*> _wan_switches;
     
     // WAN connections between datacenters
     std::vector<std::vector<Pipe*>> _wan_pipes;  // [src_dc][dest_dc]

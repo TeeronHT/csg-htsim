@@ -1,7 +1,7 @@
 #include <iostream>
 #include "eventlist.h"
 #include "logfile.h"
-#include "fat_tree_topology.h"
+#include "multi_fat_tree_topology.h"
 #include "queue.h"
 #include "pipe.h"
 #include "route.h"
@@ -18,7 +18,7 @@ int main() {
     logfile.addLogger(*qlogger);
 
     // Parameters
-    uint32_t nodes_per_dc = 100;
+    uint32_t nodes_per_dc = 16;  // Changed from 100 to 16 for faster execution
     linkspeed_bps intra_dc_speed = speedFromGbps(10);
     linkspeed_bps wan_speed = speedFromGbps(1);
     mem_b queue_size = memFromPkt(1000);
@@ -26,8 +26,8 @@ int main() {
     simtime_picosec wan_delay = timeFromMs(20); // 20ms latency
 
     // Create two datacenters
-    FatTreeTopology* dc1 = new FatTreeTopology(nodes_per_dc, intra_dc_speed, queue_size, qlogger, &eventlist, nullptr, ECN);
-    FatTreeTopology* dc2 = new FatTreeTopology(nodes_per_dc, intra_dc_speed, queue_size, qlogger, &eventlist, nullptr, ECN);
+    MultiFatTreeTopology* dc1 = new MultiFatTreeTopology(nodes_per_dc, intra_dc_speed, queue_size, qlogger, &eventlist, nullptr, ECN);
+    MultiFatTreeTopology* dc2 = new MultiFatTreeTopology(nodes_per_dc, intra_dc_speed, queue_size, qlogger, &eventlist, nullptr, ECN);
     uint32_t offset_dc2 = nodes_per_dc;
 
     // Connect datacenters with WAN

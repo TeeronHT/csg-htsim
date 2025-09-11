@@ -234,42 +234,6 @@ int main(int argc, char **argv) {
 
     Route* routeout, *routein;
 
-#ifdef MUTI_DC
-    int nodes_per_dc = no_of_nodes / 2;
-    FatTreeTopology* dc1 = new FatTreeTopology(nodes_per_dc, linkspeed, queuesize,
-                                                NULL, &eventlist, NULL, queue_type, CONST_SCHEDULER,
-                                               link_failures, failure_pct, rts, latency,
-                                               flaky_links, timeFromUs(100.0), timeFromUs(10.0));
-
-    FatTreeTopology* dc2 = new FatTreeTopology(nodes_per_dc, linkspeed, queuesize,
-                                               NULL, &eventlist, NULL, queue_type, CONST_SCHEDULER,
-                                               link_failures, failure_pct, rts, latency,
-                                               flaky_links, timeFromUs(100.0), timeFromUs(10.0));
-
-    Pipe* wan_pipe_12 = new Pipe(timeFromUs(100), &eventlist);
-    Pipe* wan_pipe_21 = new Pipe(timeFromUs(100), &eventlist);
-    Queue* wan_queue_12 = new RandomQueue(NULL, 1.5 * queuesize, linkspeed, &eventlist);
-    Queue* wan_queue_21 = new RandomQueue(NULL, 1.5 * queuesize, linkspeed, &eventlist);
-
-    auto get_inter_dc_route = [&](int src, int dst) -> pair<Route*, Route*> {
-        // src in dc1, dst in dc2
-        Route* part1 = dc1->get_path_from_tor_to_host(src);
-        Route* part2 = dc2->get_path_from_host_to_tor(dst);
-
-        Route* route_fwd = new Route(*part1);
-        route_fwd->push_back(wan_queue_12);
-        route_fwd->push_back(wan_pipe_12);
-        route_fwd->append_path(part2);
-
-        Route* route_rev = new Route(*part2);
-        route_rev->push_back(wan_queue_21);
-        route_rev->push_back(wan_pipe_21);
-        route_rev->append_path(part1);
-
-        return {route_fwd, route_rev};
-    };
-#endif
-   
 #ifdef FAT_TREE
     FatTreeTopology* top = new FatTreeTopology(no_of_nodes, linkspeed, queuesize, 
                                                NULL, &eventlist, NULL, queue_type, CONST_SCHEDULER, link_failures, failure_pct, rts, latency, flaky_links, timeFromUs(100.0), timeFromUs(10.0));

@@ -18,6 +18,7 @@
 #include "topology.h"
 #include "connection_matrix.h"
 #include "multi_datacenter/multi_datacenter_topology.h"
+#include "multi_fat_tree_switch.h"
 #include <list>
 
 // Simulation params
@@ -26,7 +27,7 @@
 #include "main.h"
 
 uint32_t RTT = 1; // this is per link delay in us; identical RTT microseconds = 0.001 ms
-#define DEFAULT_NODES 128
+#define DEFAULT_NODES 16  // Changed from 128 to 16 for faster execution
 #define DEFAULT_QUEUE_SIZE 8
 
 enum NetRouteStrategy {SOURCE_ROUTE= 0, ECMP = 1, ADAPTIVE_ROUTING = 2, ECMP_ADAPTIVE = 3, RR = 4, RR_ECMP = 5};
@@ -67,9 +68,9 @@ int main(int argc, char **argv) {
     // Multi-DC specific parameters
     uint32_t num_datacenters = 2;
     uint32_t nodes_per_dc = no_of_nodes / 2;
-    linkspeed_bps wan_speed = speedFromGbps(1); // 1 Gbps WAN links
+    linkspeed_bps wan_speed = speedFromGbps(100); // 100 Gbps WAN links
     mem_b wan_queue_size; // Will be initialized after packet size is set
-    simtime_picosec wan_delay = timeFromMs(20); // 20ms WAN latency
+    simtime_picosec wan_delay = timeFromUs((uint32_t)1); // 1us WAN latency
 
     int i = 1;
     filename << "None";
@@ -168,23 +169,23 @@ int main(int argc, char **argv) {
             i++;
         } else if (!strcmp(argv[i],"-strat")){
             if (!strcmp(argv[i+1], "ecmp")) {
-                FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
+                MultiFatTreeSwitch::set_strategy(MultiFatTreeSwitch::ECMP);
                 route_strategy = ECMP;
             }else if (!strcmp(argv[i+1], "pkt_ar")) {
-                FatTreeSwitch::set_strategy(FatTreeSwitch::ADAPTIVE_ROUTING);
+                MultiFatTreeSwitch::set_strategy(MultiFatTreeSwitch::ADAPTIVE_ROUTING);
                 route_strategy = ADAPTIVE_ROUTING;
             } else if (!strcmp(argv[i+1], "fl_ar")) {
-                FatTreeSwitch::set_strategy(FatTreeSwitch::ADAPTIVE_ROUTING);
-                FatTreeSwitch::set_ar_sticky(FatTreeSwitch::PER_FLOWLET);
+                MultiFatTreeSwitch::set_strategy(MultiFatTreeSwitch::ADAPTIVE_ROUTING);
+                MultiFatTreeSwitch::set_ar_sticky(MultiFatTreeSwitch::PER_FLOWLET);
                 route_strategy = ADAPTIVE_ROUTING;
             } else if (!strcmp(argv[i+1], "ecmp_ar")) {
-                FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP_ADAPTIVE);
+                MultiFatTreeSwitch::set_strategy(MultiFatTreeSwitch::ECMP_ADAPTIVE);
                 route_strategy = ECMP_ADAPTIVE;
             } else if (!strcmp(argv[i+1], "rr")) {
-                FatTreeSwitch::set_strategy(FatTreeSwitch::RR);
+                MultiFatTreeSwitch::set_strategy(MultiFatTreeSwitch::RR);
                 route_strategy = RR;
             } else if (!strcmp(argv[i+1], "rr_ecmp")) {
-                FatTreeSwitch::set_strategy(FatTreeSwitch::RR_ECMP);
+                MultiFatTreeSwitch::set_strategy(MultiFatTreeSwitch::RR_ECMP);
                 route_strategy = RR_ECMP;
             } else {
                 exit_error(argv[i]);
@@ -324,6 +325,7 @@ int main(int argc, char **argv) {
                         
         if (crt->size>0){
             sender->set_flowsize(crt->size, k);
+            cout << "Size of packet" << crt->size << endl;
         } 
                 
         if (host_lb == PLB) {
@@ -340,8 +342,11 @@ int main(int argc, char **argv) {
         sinks.push_back(sink);
 
         sender->setName("constcca_" + ntoa(src) + "_" + ntoa(dest));
+
         sink->setName("constcca_sink_" + ntoa(src) + "_" + ntoa(dest));
 
+        // TODO:
+        // Need to to connect each sink to ToR
           
         if (route_strategy != SOURCE_ROUTE) {
             // For non-source routing, we still need to create routes for the connect call
@@ -368,6 +373,8 @@ int main(int argc, char **argv) {
                 continue; // Skip this connection
             }
             routein = new Route(*(reverse_paths->at(choice)));
+
+            
         } else {
             // Check if we have valid paths
             if (!net_paths[src][dest] || net_paths[src][dest]->empty()) {
@@ -390,32 +397,32 @@ int main(int argc, char **argv) {
             }
 #endif
           
-            cout << "Creating forward route from " << src << " to " << dest << endl;
-            cout << "Route has " << net_paths[src][dest]->at(choice)->size() << " elements" << endl;
+            // cout << "Creating forward route from " << src << " to " << dest << endl;
+            // cout << "Route has " << net_paths[src][dest]->at(choice)->size() << " elements" << endl;
             routeout = new Route(*(net_paths[src][dest]->at(choice)));
-            cout << "Forward route created with " << routeout->size() << " hops" << endl;
-            if (routeout->size() > 0) {
-                cout << "First element type: " << typeid(*routeout->at(0)).name() << endl;
-            }
+            // cout << "Forward route created with " << routeout->size() << " hops" << endl;
+            // if (routeout->size() > 0) {
+            //     cout << "First element type: " << typeid(*routeout->at(0)).name() << endl;
+            // }
             
-            // Also check the reverse path
+            // Check the reverse path
             vector<const Route*>* reverse_paths = top->get_bidir_paths(dest,src,false);
             if (!reverse_paths || reverse_paths->empty()) {
                 cout << "No valid reverse path found from " << dest << " to " << src << endl;
                 continue; // Skip this connection
             }
-            cout << "Creating reverse route from " << dest << " to " << src << endl;
+            // cout << "Creating reverse route from " << dest << " to " << src << endl;
             routein = new Route(*(reverse_paths->at(choice)));
-            cout << "Reverse route created with " << routein->size() << " hops" << endl;
-            if (routein->size() > 0) {
-                cout << "Reverse first element type: " << typeid(*routein->at(0)).name() << endl;
-            }
+            // cout << "Reverse route created with " << routein->size() << " hops" << endl;
+            // if (routein->size() > 0) {
+            //     cout << "Reverse first element type: " << typeid(*routein->at(0)).name() << endl;
+            // }
         }
 
-        cout << "About to connect sender " << src << " to sink " << dest << endl;
+        // cout << "About to connect sender " << src << " to sink " << dest << endl;
         try {
             sender->connect(*sink, (uint32_t)crt->start + rand()%(interpacket_delay), dest, *routeout, *routein);
-            cout << "Successfully connected sender " << src << " to sink " << dest << endl;
+            // cout << "Successfully connected sender " << src << " to sink " << dest << endl;
         } catch (const std::exception& e) {
             cout << "Exception during connection setup: " << e.what() << endl;
             cout << "Failed to connect sender " << src << " to sink " << dest << endl;
@@ -451,10 +458,9 @@ int main(int argc, char **argv) {
         while (eventlist.doNextEvent()) {
             event_count++;
             if (event_count % 10000 == 0) {
-                cout << "Processed " << event_count << " events, current time: " << timeAsUs(eventlist.now()) << endl;
+                cout << "Simulation time " << timeAsUs(eventlist.now()) << endl;
             }
             if (eventlist.now() > checkpoint) {
-                cout << "Simulation time " << timeAsUs(eventlist.now()) << " (processed " << event_count << " events)" << endl;
                 checkpoint += timeFromUs(100.0);
                 if (endtime == 0) {
                     // Iterate through sinks to see if they have completed the flows
@@ -485,28 +491,29 @@ int main(int argc, char **argv) {
 
     cout << "Done" << endl;
 
-    flowlog << "Flow ID,Completion Time,ReceivedBytes,PacketsSent,InterDC" << endl;
+    flowlog << "Flow ID,Src->Dest,Completion Time,ReceivedBytes,PacketsSent,InterDC" << endl;
     list <ConstantErasureCcaSrc*>::iterator src_i;
     for (src_i = srcs.begin(); src_i != srcs.end(); src_i++) {
         ConstantErasureCcaSink* sink = (*src_i)->_sink;
         simtime_picosec time = (*src_i)->_completion_time > 0 ? (*src_i)->_completion_time - (*src_i)->_start_time: 0;
-        bool is_inter_dc = top->is_inter_dc_flow((*src_i)->flow().flow_id(), (*src_i)->_destination);
-        flowlog << (*src_i)->get_id() << "," << time << "," << sink->cumulative_ack() << "," << (*src_i)->_packets_sent << "," << (is_inter_dc ? "1" : "0") << endl;
+        bool is_inter_dc = top->is_inter_dc_flow((*src_i)->_addr, (*src_i)->_destination);
+        flowlog << (*src_i)->get_id() << "," << (*src_i)->_addr << "->" << (*src_i)->_destination << "," << time << "," << sink->cumulative_ack() << "," << (*src_i)->_packets_sent << "," << (is_inter_dc ? "1" : "0") << endl;
     }
     flowlog.close();
     
     list <ConstantErasureCcaSink*>::iterator sink_i;
     for (sink_i = sinks.begin(); sink_i != sinks.end(); sink_i++) {
-        cout << (*sink_i)->nodename() << " received " << (*sink_i)->cumulative_ack() << " bytes" << endl;
-        if ((*sink_i)->cumulative_ack() < 2004000) { // todo: change this
+        ConstantErasureCcaSink* sink = (*sink_i);
+        ConstantErasureCcaSrc* counterpart_src = sink->_src;
+        uint32_t expected_size = counterpart_src->flow_size();
+        cout << (*sink_i)->nodename() << " received " << (*sink_i)->cumulative_ack() << " bytes. Expected " << expected_size << endl;
+        if ((*sink_i)->cumulative_ack() < expected_size) {
             cout << "Incomplete flow " << endl;
-            ConstantErasureCcaSink* sink = (*sink_i);
-            ConstantErasureCcaSrc* counterpart_src = sink->_src;
             cout << "Src, sent: " << counterpart_src->_packets_sent << "; ACKED " << counterpart_src->packets_acked() << endl;
+            cout << "Expected: " << expected_size << " bytes, received: " << (*sink_i)->cumulative_ack() << " bytes" << endl;
         }
     }
     
-    cout << "About to delete top" << endl;
     delete top;
     cout << "Deleted top" << endl;
     return 0;
