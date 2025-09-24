@@ -529,11 +529,11 @@ int main(int argc, char **argv) {
     // for (src_i = swift_srcs.begin(); src_i != swift_srcs.end(); src_i++) {
     //     cout << "Src, sent: " << (*src_i)->_highest_dsn_sent << "[rtx: " << (*src_i)->_subs[0]. << "] nacks: " << (*src_i)->_nacks_received << " pulls: " << (*src_i)->_pulls_received << " paths: " << (*src_i)->_paths.size() << endl;
     // }
-    flowlog << "Flow ID,Completion Time,ReceivedBytes,PacketsSent" << endl;
+    flowlog << "Flow ID,Src->Dest,Completion Time,ReceivedBytes,PacketsSent,InterDC" << endl;
     for (src_i = srcs.begin(); src_i != srcs.end(); src_i++) {
         ConstantErasureCcaSink* sink = (*src_i)->_sink;
         simtime_picosec time = (*src_i)->_completion_time > 0 ? (*src_i)->_completion_time - (*src_i)->_start_time: 0;
-        flowlog << (*src_i)->get_id() << "," << time << "," << sink->cumulative_ack() << "," << (*src_i)->_packets_sent <<  endl;
+        flowlog << (*src_i)->get_id() << "," << (*src_i)->_addr << "->" << (*src_i)->_destination << "," << time << "," << sink->cumulative_ack() << "," << (*src_i)->_packets_sent << "," <<  "0" << endl;
     }
     flowlog.close();
     list <ConstantErasureCcaSink*>::iterator sink_i;

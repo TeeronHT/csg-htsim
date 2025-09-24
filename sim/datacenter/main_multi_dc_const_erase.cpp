@@ -413,10 +413,7 @@ int main(int argc, char **argv) {
             }
             // cout << "Creating reverse route from " << dest << " to " << src << endl;
             routein = new Route(*(reverse_paths->at(choice)));
-            // cout << "Reverse route created with " << routein->size() << " hops" << endl;
-            // if (routein->size() > 0) {
-            //     cout << "Reverse first element type: " << typeid(*routein->at(0)).name() << endl;
-            // }
+
         }
 
         // cout << "About to connect sender " << src << " to sink " << dest << endl;

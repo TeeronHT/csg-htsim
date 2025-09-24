@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ECMP
-for i in {1..1}
+for i in {1..10}
 do
     ./htsim_multi_dc -end 0 -tm ./connection_matrices/multidc_256n_2dc_2MB.cm -nodes 256 -strat ecmp -of ../../results/opt-4-2/baseline-multidc/subflows2-ecmp/opt-multidc-256n-2MB-sf2-ecmp-${i}.csv -ratecoef 0.9 -subflows 2
 done
