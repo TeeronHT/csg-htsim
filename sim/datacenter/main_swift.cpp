@@ -322,7 +322,7 @@ int main(int argc, char **argv) {
             net_paths[dest][src] = paths;
         }
 
-        swiftSrc = new SwiftSrc(swiftRtxScanner, NULL, NULL, eventlist, src);  // TODO: add trigger support
+        swiftSrc = new SwiftSrc(swiftRtxScanner, NULL, NULL, eventlist, src);  // TODO: add trigger support (difference between CCA erasure)
         swiftSrc->set_cwnd(cwnd*Packet::data_packet_size());
                         
         if (crt->size>0){

@@ -27,7 +27,7 @@
 #include "main.h"
 
 uint32_t RTT = 1; // this is per link delay in us; identical RTT microseconds = 0.001 ms
-#define DEFAULT_NODES 16  // Changed from 128 to 16 for faster execution
+#define DEFAULT_NODES 128
 #define DEFAULT_QUEUE_SIZE 8
 
 enum NetRouteStrategy {SOURCE_ROUTE= 0, ECMP = 1, ADAPTIVE_ROUTING = 2, ECMP_ADAPTIVE = 3, RR = 4, RR_ECMP = 5};
@@ -68,9 +68,6 @@ int main(int argc, char **argv) {
     // Multi-DC specific parameters
     uint32_t num_datacenters = 2;
     uint32_t nodes_per_dc = no_of_nodes / 2;
-    linkspeed_bps wan_speed = speedFromGbps(100); // 100 Gbps WAN links
-    mem_b wan_queue_size; // Will be initialized after packet size is set
-    simtime_picosec wan_delay = timeFromUs((uint32_t)1); // 1us WAN latency
 
     int i = 1;
     filename << "None";
@@ -196,6 +193,10 @@ int main(int argc, char **argv) {
         }
         i++;
     }
+
+    linkspeed_bps wan_speed = speedFromGbps(100 * no_of_nodes); // 100 Gbps WAN links
+    mem_b wan_queue_size; // Will be initialized after packet size is set
+    simtime_picosec wan_delay = timeFromUs((uint32_t)1); // 1us WAN latency
     
     Packet::set_packet_size(packet_size);
     eventlist.setEndtime(endtime);

@@ -10,7 +10,7 @@ echo "Starting at $(date)"
 mkdir -p ../../../results/test-suite/routing-strategies
 
 # Test parameters
-NODES=128
+NODES=256
 SUBSETS=(1 2 4 8)
 RATE_COEF=0.9
 RUNS=5  # Reduced for testing
