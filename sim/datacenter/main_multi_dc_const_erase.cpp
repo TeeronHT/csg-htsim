@@ -69,6 +69,11 @@ int main(int argc, char **argv) {
     uint32_t num_datacenters = 2;
     uint32_t nodes_per_dc = no_of_nodes / 2;
 
+    // speedFromGbps(100 * nodes_per_dc) consumes a massive amount of memory (25.6 Tbps, num packets in flight)
+    linkspeed_bps wan_speed = speedFromGbps(100 * nodes_per_dc); // 100 Gbps WAN links
+    mem_b wan_queue_size; // Will be initialized after packet size is set
+    simtime_picosec wan_delay = timeFromUs((uint32_t)1); // 1us WAN latency
+
     int i = 1;
     filename << "None";
     flowfilename << "flowlog.csv";
@@ -193,10 +198,6 @@ int main(int argc, char **argv) {
         }
         i++;
     }
-
-    linkspeed_bps wan_speed = speedFromGbps(100 * no_of_nodes); // 100 Gbps WAN links
-    mem_b wan_queue_size; // Will be initialized after packet size is set
-    simtime_picosec wan_delay = timeFromUs((uint32_t)1); // 1us WAN latency
     
     Packet::set_packet_size(packet_size);
     eventlist.setEndtime(endtime);
