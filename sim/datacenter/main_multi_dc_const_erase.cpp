@@ -297,6 +297,32 @@ int main(int argc, char **argv) {
     all_conns = conns->getAllConnections();
     uint32_t connCount = all_conns->size();
 
+    // Count inter-DC and intra-DC flows
+    uint32_t num_inter_dc_flows = 0;
+    uint32_t num_intra_dc_flows = 0;
+    for (uint32_t c = 0; c < all_conns->size(); c++) {
+        connection* crt = all_conns->at(c);
+        if (top->is_inter_dc_flow(crt->src, crt->dst)) {
+            num_inter_dc_flows++;
+        } else {
+            num_intra_dc_flows++;
+        }
+    }
+
+    // Calculate bottleneck rates
+    double inter_dc_bottleneck_rate = (wan_speed / ((double)num_inter_dc_flows / no_of_nodes)) / (packet_size * 8);
+    double intra_dc_bottleneck_rate = (linkspeed / ((double)num_intra_dc_flows / no_of_nodes)) / (packet_size * 8);
+    
+    // Determine flow rates based on bottleneck analysis
+    double inter_dc_flow_rate, intra_dc_flow_rate;
+    if (inter_dc_bottleneck_rate < intra_dc_bottleneck_rate) {
+        inter_dc_flow_rate = inter_dc_bottleneck_rate;
+        intra_dc_flow_rate = (intra_dc_bottleneck_rate - inter_dc_bottleneck_rate) * (num_inter_dc_flows / no_of_nodes) / ((num_intra_dc_flows) / no_of_nodes) + intra_dc_bottleneck_rate;
+    } else {
+        inter_dc_flow_rate = intra_dc_bottleneck_rate;
+        intra_dc_flow_rate = intra_dc_bottleneck_rate;
+    }
+
     for (uint32_t c = 0; c < all_conns->size(); c++){
         connection* crt = all_conns->at(c);
         uint32_t src = crt->src;
@@ -315,11 +341,23 @@ int main(int argc, char **argv) {
             net_paths[dest][src] = paths;
         }
 
-        // Adjust rate based on whether it's inter-DC or intra-DC
-        double base_rate = (linkspeed / ((double)all_conns->size() / no_of_nodes)) / (packet_size * 8);
+        // Calculate fair share rates for intra-DC and inter-DC flows
+        // double intra_dc_rate = (linkspeed / ((double)all_conns->size() / no_of_nodes)) / (packet_size * 8);
+        // double inter_dc_rate = (wan_speed / ((double)all_conns->size() / no_of_nodes)) / (packet_size * 8);
+        
+        // Use fair share approach: min(intra_DC_rate, inter_DC_rate) for each flow
+        // Use the calculated rates based on bottleneck analysis
+        double base_rate;
         if (top->is_inter_dc_flow(src, dest)) {
-            // Inter-DC flows use WAN bandwidth
-            base_rate = (wan_speed / ((double)all_conns->size() / no_of_nodes)) / (packet_size * 8);
+            // For inter-DC flows, use the minimum of intra-DC and inter-DC fair share rates
+            // base_rate = min(intra_dc_rate, inter_dc_rate);
+            base_rate = inter_dc_flow_rate;
+
+        } else {
+            // For intra-DC flows, use intra-DC rate
+            // base_rate = intra_dc_rate;
+            base_rate = intra_dc_flow_rate;
+
         }
         
         simtime_picosec interpacket_delay = timeFromSec(1. / (base_rate * rate_coef));
@@ -439,6 +477,22 @@ int main(int argc, char **argv) {
     }
     
     cout << "Loaded " << connID << " connections in total\n";
+    // cout << "***** Fair Share Rate Summary *****" << endl;
+    // double intra_dc_rate_summary = (linkspeed / ((double)all_conns->size() / no_of_nodes)) / (packet_size * 8);
+    // double inter_dc_rate_summary = (wan_speed / ((double)all_conns->size() / no_of_nodes)) / (packet_size * 8);
+    // cout << "Intra-DC fair share rate: " << intra_dc_rate_summary << " packets/sec" << endl;
+    // cout << "Inter-DC fair share rate: " << inter_dc_rate_summary << " packets/sec" << endl;
+    // cout << "Rate limiting factor: " << (intra_dc_rate_summary < inter_dc_rate_summary ? "Intra-DC" : "Inter-DC") << endl;
+    
+    cout << "***** Bottleneck Rate Analysis Summary *****" << endl;
+    cout << "Inter-DC flows: " << num_inter_dc_flows << endl;
+    cout << "Intra-DC flows: " << num_intra_dc_flows << endl;
+    cout << "Inter-DC bottleneck rate: " << inter_dc_bottleneck_rate << " packets/sec" << endl;
+    cout << "Intra-DC bottleneck rate: " << intra_dc_bottleneck_rate << " packets/sec" << endl;
+    cout << "Assigned inter-DC flow rate: " << inter_dc_flow_rate << " packets/sec" << endl;
+    cout << "Assigned intra-DC flow rate: " << intra_dc_flow_rate << " packets/sec" << endl;
+    cout << "Bottleneck limiting factor: " << (inter_dc_bottleneck_rate < intra_dc_bottleneck_rate ? "Inter-DC" : "Intra-DC") << endl;
+    
     cout << "***** All connections complete, entering cleanup/statistics *****" << endl;
     cout << "Inter-DC flows: " << endl;
     for (uint32_t c = 0; c < all_conns->size(); c++){
