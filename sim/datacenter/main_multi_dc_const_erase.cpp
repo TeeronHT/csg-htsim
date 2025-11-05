@@ -310,17 +310,23 @@ int main(int argc, char **argv) {
     }
 
     // Calculate bottleneck rates
-    double inter_dc_bottleneck_rate = (wan_speed / ((double)num_inter_dc_flows / no_of_nodes)) / (packet_size * 8);
-    double intra_dc_bottleneck_rate = (linkspeed / ((double)num_intra_dc_flows / no_of_nodes)) / (packet_size * 8);
+    // Doesn't account for multiple CORE switches in the WAN path
+    double inter_dc_bottleneck_rate = (wan_speed / ((double)num_inter_dc_flows)) / (packet_size * 8);
+    // I did wan_speed / (num_inter_dc_flows / no_of_nodes) to get the fair share rate for inter-DC flows
+    // This caused a huge spike in retransmission of packets but did also reduce CCT
+
+    // Use single-DC approach for intra-DC flows to prevent congestion
+    // No longer over allocating to intra-DC flows, which was causing the huge spike in retransmission of packets
+    double intra_dc_flow_rate = (linkspeed / ((double)all_conns->size() / no_of_nodes)) / (packet_size * 8);
     
     // Determine flow rates based on bottleneck analysis
-    double inter_dc_flow_rate, intra_dc_flow_rate;
-    if (inter_dc_bottleneck_rate < intra_dc_bottleneck_rate) {
+    double inter_dc_flow_rate;
+    if (inter_dc_bottleneck_rate < intra_dc_flow_rate) {
+        // WAN is the bottleneck, limit inter-DC flows to prevent WAN congestion
         inter_dc_flow_rate = inter_dc_bottleneck_rate;
-        intra_dc_flow_rate = (intra_dc_bottleneck_rate - inter_dc_bottleneck_rate) * (num_inter_dc_flows / no_of_nodes) / ((num_intra_dc_flows) / no_of_nodes) + intra_dc_bottleneck_rate;
     } else {
-        inter_dc_flow_rate = intra_dc_bottleneck_rate;
-        intra_dc_flow_rate = intra_dc_bottleneck_rate;
+        // Intra-DC is the bottleneck - use fair share for inter-DC flows
+        inter_dc_flow_rate = intra_dc_flow_rate;
     }
 
     for (uint32_t c = 0; c < all_conns->size(); c++){
@@ -488,10 +494,10 @@ int main(int argc, char **argv) {
     cout << "Inter-DC flows: " << num_inter_dc_flows << endl;
     cout << "Intra-DC flows: " << num_intra_dc_flows << endl;
     cout << "Inter-DC bottleneck rate: " << inter_dc_bottleneck_rate << " packets/sec" << endl;
-    cout << "Intra-DC bottleneck rate: " << intra_dc_bottleneck_rate << " packets/sec" << endl;
+    cout << "Intra-DC flow rate (single-DC approach): " << intra_dc_flow_rate << " packets/sec" << endl;
     cout << "Assigned inter-DC flow rate: " << inter_dc_flow_rate << " packets/sec" << endl;
     cout << "Assigned intra-DC flow rate: " << intra_dc_flow_rate << " packets/sec" << endl;
-    cout << "Bottleneck limiting factor: " << (inter_dc_bottleneck_rate < intra_dc_bottleneck_rate ? "Inter-DC" : "Intra-DC") << endl;
+    cout << "Bottleneck limiting factor: " << (inter_dc_bottleneck_rate < intra_dc_flow_rate ? "Inter-DC (WAN)" : "Intra-DC") << endl;
     
     cout << "***** All connections complete, entering cleanup/statistics *****" << endl;
     cout << "Inter-DC flows: " << endl;

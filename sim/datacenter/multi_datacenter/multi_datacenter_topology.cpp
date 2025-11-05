@@ -307,7 +307,7 @@ Route* MultiDatacenterTopology::get_wan_route(uint32_t src_dc, uint32_t dest_dc,
     Route* complete_route = new Route();
     
     // Add a scheduler at the beginning (required by ConstantErasureCcaSrc::connect)
-    ConstFairScheduler* scheduler = new ConstFairScheduler(_intra_dc_speed, *_eventlist, nullptr);
+    ConstFairScheduler* scheduler = new ConstFairScheduler(_wan_speed, *_eventlist, nullptr);
     complete_route->push_back(scheduler);
     
     // Add WAN connection - only for inter-DC traffic
@@ -366,8 +366,10 @@ void MultiDatacenterTopology::create_core_wan_connections(uint32_t dc_id) {
         // Create queue from CORE switch to WAN switch
         std::stringstream ss;
         ss << "CORE" << core_id << "_to_WAN_DC" << dc_id;
-        Queue* core_to_wan_queue = new RandomQueue(_intra_dc_speed, _intra_dc_queue_size, 
-                                                   *_eventlist, nullptr, _intra_dc_queue_size);
+        // Queue* core_to_wan_queue = new RandomQueue(_intra_dc_speed, _intra_dc_queue_size, 
+        //                                            *_eventlist, nullptr, _intra_dc_queue_size);
+        Queue* core_to_wan_queue = new RandomQueue(_wan_speed, _wan_queue_size, 
+                                                   *_eventlist, nullptr, _wan_queue_size);
         core_to_wan_queue->setName(ss.str());
         
         // Create pipe from CORE switch to WAN switch
@@ -386,8 +388,10 @@ void MultiDatacenterTopology::create_core_wan_connections(uint32_t dc_id) {
         // Create queue from WAN switch to CORE switch (for reverse direction)
         ss.str("");
         ss << "WAN_to_CORE" << core_id << "_DC" << dc_id;
-        Queue* wan_to_core_queue = new RandomQueue(_intra_dc_speed, _intra_dc_queue_size, 
-                                                   *_eventlist, nullptr, _intra_dc_queue_size);
+        // Queue* wan_to_core_queue = new RandomQueue(_intra_dc_speed, _intra_dc_queue_size, 
+        //                                            *_eventlist, nullptr, _intra_dc_queue_size);
+        Queue* wan_to_core_queue = new RandomQueue(_wan_speed, _wan_queue_size, 
+                                                   *_eventlist, nullptr, _wan_queue_size);
         wan_to_core_queue->setName(ss.str());
         
         // Create pipe from WAN switch to CORE switch

@@ -7,7 +7,7 @@ echo "=== Routing Strategy Test Suite ==="
 echo "Starting at $(date)"
 
 # Create results directory
-mkdir -p ../../../results/test-suite/routing-strategies
+mkdir -p ../../results/test-suite/routing-strategies
 
 # Test parameters
 NODES=256
@@ -32,14 +32,14 @@ do
         do
             echo "    Run $i/$RUNS at $(date)"
             
-            ../htsim_multi_dc \
+            ./htsim_multi_dc \
                 -end 0 \
-                -tm ../connection_matrices/multidc_256n_2dc_2MB.cm \
+                -tm ./connection_matrices/multidc_256n_2dc_2MB.cm \
                 -nodes $NODES \
                 -strat $strategy \
                 -subflows $subflows \
                 -ratecoef $RATE_COEF \
-                -of ../../../results/test-suite/routing-strategies/strategy-${strategy}-sf${subflows}-run${i}.csv
+                -of ../../results/test-suite/routing-strategies/strategy-${strategy}-sf${subflows}-run${i}.csv
         done
     done
 done

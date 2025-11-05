@@ -4,6 +4,7 @@ from random import seed, shuffle
 
 if len(sys.argv) != 8:
     print("Usage: python gen_multidc_alltoall.py <filename> <nodes> <dcs> <conns_per_dc_group> <groupsize> <flowsize> <randseed>")
+    print("Note: For true all-to-all, groupsize is ignored for intra-DC connections.")
     sys.exit(1)
 
 filename = sys.argv[1]
@@ -19,24 +20,16 @@ if nodes % dcs != 0:
     sys.exit(1)
 
 nodes_per_dc = nodes // dcs
-if conns_per_dc % groupsize != 0:
-    print("conns_per_dc must be a multiple of groupsize\n")
-    sys.exit(1)
-
-groups_per_dc = conns_per_dc // groupsize
 
 def intra_dc_alltoall(dc_offset, f, id_start):
-    srcs = [dc_offset + n for n in range(nodes_per_dc)]
-    if randseed != 0:
-        shuffle(srcs)
+    """Create true all-to-all connections within a datacenter.
+    Each node connects to all other nodes in the same DC."""
     id = id_start
-    for group in range(groups_per_dc):
-        groupsrcs = srcs[group * groupsize : (group + 1) * groupsize]
-        for s in range(groupsize):
-            for d in range(1, groupsize):
+    for src in range(dc_offset, dc_offset + nodes_per_dc):
+        for dst in range(dc_offset, dc_offset + nodes_per_dc):
+            if src != dst:  # Exclude self-connections
                 id += 1
-                dst = (s+d)%groupsize
-                out = f"{groupsrcs[s]}->{groupsrcs[dst]} id {id} start 0 size {flowsize}"
+                out = f"{src}->{dst} id {id} start 0 size {flowsize}"
                 print(out, file=f)
     return id
 
@@ -55,12 +48,11 @@ if randseed != 0:
 
 # First pass: count total connections
 id = 0
-# Intra-DC all-to-all
+# Intra-DC all-to-all: each node connects to all other nodes in same DC
 for dc in range(dcs):
-    # Count intra-DC connections
-    for group in range(groups_per_dc):
-        for s in range(groupsize):
-            for d in range(1, groupsize):
+    for src in range(dc*nodes_per_dc, (dc+1)*nodes_per_dc):
+        for dst in range(dc*nodes_per_dc, (dc+1)*nodes_per_dc):
+            if src != dst:
                 id += 1
 # Inter-DC all-to-all (between every pair of DCs)
 for dc_a in range(dcs):
