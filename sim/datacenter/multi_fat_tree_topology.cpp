@@ -1189,119 +1189,124 @@ vector<const Route*>* MultiFatTreeTopology::get_bidir_paths(uint32_t src, uint32
         }
         
         // Go up to AGG switch
+        // For inter-DC routing, create multiple paths through different aggregation and core switches
+        // This allows ECMP/RR to balance traffic across multiple core switches
         uint32_t pod = HOST_POD(local_src);
-        uint32_t agg_switch = MIN_POD_AGG_SWITCH(pod);
         
-        // std::cout << "  FatTree: Host " << local_src << " in pod " << pod << ", TOR switch " << HOST_POD_SWITCH(local_src) << ", AGG switch " << agg_switch << std::endl;
-        
-        if (!queues_nlp_nup[HOST_POD_SWITCH(local_src)][agg_switch][0]) {
-            std::cerr << "  FatTree: ERROR - NULL queue from TOR " << HOST_POD_SWITCH(local_src) << " to AGG " << agg_switch << std::endl;
-            std::cerr << "  FatTree: This suggests the TOR-AGG connection was not properly initialized" << std::endl;
-            delete routeout;
-            return paths;
-        }
-        routeout->push_back(queues_nlp_nup[HOST_POD_SWITCH(local_src)][agg_switch][0]);
-        
-        if (!pipes_nlp_nup[HOST_POD_SWITCH(local_src)][agg_switch][0]) {
-            std::cerr << "  FatTree: ERROR - NULL pipe from TOR to AGG switch" << std::endl;
-            delete routeout;
-            return paths;
-        }
-        routeout->push_back(pipes_nlp_nup[HOST_POD_SWITCH(local_src)][agg_switch][0]);
-        
-        if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN) {
-            PacketSink* remote = queues_nlp_nup[HOST_POD_SWITCH(local_src)][agg_switch][0]->getRemoteEndpoint();
-            if (!remote) {
-                std::cerr << "  FatTree: ERROR - NULL remote endpoint from TOR to AGG switch" << std::endl;
-                delete routeout;
-                return paths;
+        // Iterate over all aggregation switches in the pod (similar to intra-DC flows)
+        for (uint32_t upper = MIN_POD_AGG_SWITCH(pod); upper <= MAX_POD_AGG_SWITCH(pod); upper++) {
+            // Check if this aggregation switch is reachable from the source TOR
+            if (!queues_nlp_nup[HOST_POD_SWITCH(local_src)][upper][0]) {
+                // Skip this aggregation switch if no connection exists
+                continue;
             }
-            routeout->push_back(remote);
-        }
-        
-        // Go up to CORE switch
-        // For inter-DC routing, we need to find a valid CORE switch that this AGG switch connects to
-        uint32_t core_switch = 0;
-        bool found_core = false;
-        
-        // Find the first valid CORE switch that this AGG switch connects to
-        uint32_t podpos = agg_switch % _agg_switches_per_pod;
-        for (uint32_t l = 0; l < _radix_up[AGG_TIER]/_bundlesize[CORE_TIER]; l++) {
-            uint32_t candidate_core = podpos + _agg_switches_per_pod * l;
-            if (candidate_core < NCORE && queues_nup_nc[agg_switch][candidate_core][0] != NULL) {
-                core_switch = candidate_core;
-                found_core = true;
-                break;
-            }
-        }
-        
-        if (!found_core) {
-            std::cerr << "  FatTree: ERROR - No valid CORE switch found for AGG " << agg_switch << std::endl;
-            std::cerr << "  FatTree: AGG switch " << agg_switch << " has no valid CORE connections" << std::endl;
-            delete routeout;
-            return paths;
-        }
-        
-        // std::cout << "  FatTree: AGG switch " << agg_switch << " to CORE switch " << core_switch << std::endl;
-        // std::cout << "  FatTree: queues_nup_nc size: [" << queues_nup_nc.size() << "][" << queues_nup_nc[0].size() << "][" << queues_nup_nc[0][0].size() << "]" << std::endl;
-        routeout->push_back(queues_nup_nc[agg_switch][core_switch][0]);
-        
-        if (!pipes_nup_nc[agg_switch][core_switch][0]) {
-            std::cerr << "  FatTree: ERROR - NULL pipe from AGG to CORE switch" << std::endl;
-            delete routeout;
-            return paths;
-        }
-        routeout->push_back(pipes_nup_nc[agg_switch][core_switch][0]);
-        
-        if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN) {
-            PacketSink* remote = queues_nup_nc[agg_switch][core_switch][0]->getRemoteEndpoint();
-            if (!remote) {
-                std::cerr << "  FatTree: ERROR - NULL remote endpoint from AGG to CORE switch" << std::endl;
-                delete routeout;
-                return paths;
-            }
-            routeout->push_back(remote);
-        }
-        
-        // Finally, route to WAN switch
-        if (_wan_switch) {
-            // Additional safety check for WAN switch
-            if (dynamic_cast<PacketSink*>(_wan_switch) == nullptr) {
-                std::cerr << "  FatTree: ERROR - WAN switch is not a valid PacketSink!" << std::endl;
-                delete routeout;
-                return paths;
-            }
-            routeout->push_back(_wan_switch);
-            // std::cout << "  FatTree: Added WAN switch to route" << std::endl;
-        } else {
-            std::cerr << "  FatTree: ERROR - No WAN switch connected!" << std::endl;
-            delete routeout;
-            return paths;
-        }
-        
-        // Validate the route before adding it
-        if (routeout->size() == 0) {
-            std::cerr << "  FatTree: ERROR - Created empty route!" << std::endl;
-            delete routeout;
-            return paths;
-        }
-        
-        // Validate that the route ends at a WAN switch (not a local host)
-        if (routeout->size() > 0) {
-            PacketSink* last_element = dynamic_cast<PacketSink*>(routeout->at(routeout->size() - 1));
-            if (last_element) {
-                MultiFatTreeSwitch* last_switch = dynamic_cast<MultiFatTreeSwitch*>(last_element);
-                if (last_switch && last_switch->getType() == MultiFatTreeSwitch::WAN) {
-                    // std::cout << "  FatTree: Route ends at WAN switch (correct)" << std::endl;
-                } else {
-                    // std::cout << "  FatTree: Route ends at non-WAN element (unexpected)" << std::endl;
+            
+            // For each aggregation switch, iterate over all valid core switches
+            uint32_t podpos = upper % _agg_switches_per_pod;
+            for (uint32_t l = 0; l < _radix_up[AGG_TIER]/_bundlesize[CORE_TIER]; l++) {
+                uint32_t core = podpos + _agg_switches_per_pod * l;
+                
+                // Check if this core switch is valid and reachable
+                if (core >= NCORE || queues_nup_nc[upper][core][0] == NULL) {
+                    continue;
+                }
+                
+                // For each core switch, iterate over all bundles
+                for (uint32_t b1 = 0; b1 < _bundlesize[AGG_TIER]; b1++) {
+                    // Check if this bundle exists for TOR->AGG
+                    if (!queues_nlp_nup[HOST_POD_SWITCH(local_src)][upper][b1] || 
+                        !pipes_nlp_nup[HOST_POD_SWITCH(local_src)][upper][b1]) {
+                        continue;
+                    }
+                    
+                    for (uint32_t b2 = 0; b2 < _bundlesize[CORE_TIER]; b2++) {
+                        // Check if this bundle exists for AGG->CORE
+                        if (!queues_nup_nc[upper][core][b2] || 
+                            !pipes_nup_nc[upper][core][b2]) {
+                            continue;
+                        }
+                        
+                        // Create a new route for this combination
+                        routeout = new Route();
+                        
+                        // Start from source host to TOR
+                        routeout->push_back(queues_ns_nlp[local_src][HOST_POD_SWITCH(local_src)][0]);
+                        routeout->push_back(pipes_ns_nlp[local_src][HOST_POD_SWITCH(local_src)][0]);
+                        
+                        if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN) {
+                            PacketSink* remote = queues_ns_nlp[local_src][HOST_POD_SWITCH(local_src)][0]->getRemoteEndpoint();
+                            if (!remote) {
+                                std::cerr << "  FatTree: ERROR - NULL remote endpoint from host " << local_src << " to TOR switch" << std::endl;
+                                delete routeout;
+                                continue;
+                            }
+                            routeout->push_back(remote);
+                        }
+                        
+                        // Go up to AGG switch
+                        routeout->push_back(queues_nlp_nup[HOST_POD_SWITCH(local_src)][upper][b1]);
+                        routeout->push_back(pipes_nlp_nup[HOST_POD_SWITCH(local_src)][upper][b1]);
+                        
+                        if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN) {
+                            PacketSink* remote = queues_nlp_nup[HOST_POD_SWITCH(local_src)][upper][b1]->getRemoteEndpoint();
+                            if (!remote) {
+                                std::cerr << "  FatTree: ERROR - NULL remote endpoint from TOR to AGG switch" << std::endl;
+                                delete routeout;
+                                continue;
+                            }
+                            routeout->push_back(remote);
+                        }
+                        
+                        // Go up to CORE switch
+                        routeout->push_back(queues_nup_nc[upper][core][b2]);
+                        routeout->push_back(pipes_nup_nc[upper][core][b2]);
+                        
+                        if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN) {
+                            PacketSink* remote = queues_nup_nc[upper][core][b2]->getRemoteEndpoint();
+                            if (!remote) {
+                                std::cerr << "  FatTree: ERROR - NULL remote endpoint from AGG to CORE switch" << std::endl;
+                                delete routeout;
+                                continue;
+                            }
+                            routeout->push_back(remote);
+                        }
+                        
+                        // Finally, route to WAN switch
+                        if (_wan_switch) {
+                            // Additional safety check for WAN switch
+                            if (dynamic_cast<PacketSink*>(_wan_switch) == nullptr) {
+                                std::cerr << "  FatTree: ERROR - WAN switch is not a valid PacketSink!" << std::endl;
+                                delete routeout;
+                                continue;
+                            }
+                            routeout->push_back(_wan_switch);
+                        } else {
+                            std::cerr << "  FatTree: ERROR - No WAN switch connected!" << std::endl;
+                            delete routeout;
+                            continue;
+                        }
+                        
+                        // Validate the route before adding it
+                        if (routeout->size() == 0) {
+                            std::cerr << "  FatTree: ERROR - Created empty route!" << std::endl;
+                            delete routeout;
+                            continue;
+                        }
+                        
+                        paths->push_back(routeout);
+                        check_non_null(routeout);
+                    }
                 }
             }
         }
         
-        paths->push_back(routeout);
-        check_non_null(routeout);
-        // std::cout << "  FatTree: Created inter-DC route with " << routeout->size() << " elements" << std::endl;
+        // Check if we created any paths
+        if (paths->size() == 0) {
+            std::cerr << "  FatTree: ERROR - No valid inter-DC paths created!" << std::endl;
+            std::cerr << "  FatTree: Source host " << local_src << " in pod " << pod << std::endl;
+        }
+        
+        // std::cout << "  FatTree: Created " << paths->size() << " inter-DC paths" << std::endl;
         return paths;
     }
     
@@ -1461,73 +1466,100 @@ vector<const Route*>* MultiFatTreeTopology::get_bidir_paths(uint32_t src, uint32
                                 if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
                                     routeout->push_back(queues_nup_nc[upper][core][b2_up]->getRemoteEndpoint());
         
-                                //now take the only link down to the destination server!
-        
-                                uint32_t upper2 = MIN_POD_AGG_SWITCH(HOST_POD(local_dest)) + core % _agg_switches_per_pod;
-                                //printf("K %d HOST_POD(%d) %d core %d upper2 %d\n",K,local_dest,HOST_POD(local_dest),core, upper2);
-        
-                                routeout->push_back(queues_nc_nup[core][upper2][b2_down]);
-                                routeout->push_back(pipes_nc_nup[core][upper2][b2_down]);
-
-                                if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                                    routeout->push_back(queues_nc_nup[core][upper2][b2_down]->getRemoteEndpoint());        
-
-                                routeout->push_back(queues_nup_nlp[upper2][HOST_POD_SWITCH(local_dest)][b1_down]);
-                                routeout->push_back(pipes_nup_nlp[upper2][HOST_POD_SWITCH(local_dest)][b1_down]);
-
-                                if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                                    routeout->push_back(queues_nup_nlp[upper2][HOST_POD_SWITCH(local_dest)][b1_down]->getRemoteEndpoint());
-        
-                                routeout->push_back(queues_nlp_ns[HOST_POD_SWITCH(local_dest)][local_dest][0]);
-                                routeout->push_back(pipes_nlp_ns[HOST_POD_SWITCH(local_dest)][local_dest][0]);
-
-                                if (reverse) {
-                                    // reverse path for RTS packets
-                                    routeback = new Route();
-        
-                                    routeback->push_back(queues_ns_nlp[local_dest][HOST_POD_SWITCH(local_dest)][0]);
-                                    routeback->push_back(pipes_ns_nlp[local_dest][HOST_POD_SWITCH(local_dest)][0]);
-
-                                    if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                                        routeback->push_back(queues_ns_nlp[local_dest][HOST_POD_SWITCH(local_dest)][0]->getRemoteEndpoint());
-        
-                                    routeback->push_back(queues_nlp_nup[HOST_POD_SWITCH(local_dest)][upper2][b1_down]);
-                                    routeback->push_back(pipes_nlp_nup[HOST_POD_SWITCH(local_dest)][upper2][b1_down]);
+                                // Iterate over all destination aggregation switches to enable load balancing
+                                // This allows the load balancing scheme to distribute traffic across different
+                                // destination aggregation switches, not just deterministically route to one
+                                for (uint32_t upper2 = MIN_POD_AGG_SWITCH(HOST_POD(local_dest)); 
+                                     upper2 <= MAX_POD_AGG_SWITCH(HOST_POD(local_dest)); 
+                                     upper2++) {
+                                    
+                                    // Check if queues exist for this core->aggregation connection
+                                    if (!queues_nc_nup[core][upper2][b2_down] ||
+                                        !pipes_nc_nup[core][upper2][b2_down]) {
+                                        continue; // Skip if connection doesn't exist
+                                    }
+                                    
+                                    // Check if aggregation->ToR connection exists
+                                    if (!queues_nup_nlp[upper2][HOST_POD_SWITCH(local_dest)][b1_down] ||
+                                        !pipes_nup_nlp[upper2][HOST_POD_SWITCH(local_dest)][b1_down]) {
+                                        continue; // Skip if connection doesn't exist
+                                    }
+                                    
+                                    // Create a new route for this destination aggregation switch
+                                    Route* routeout_copy = new Route();
+                                    
+                                    // Copy the path up to the core switch
+                                    for (uint32_t i = 0; i < routeout->size(); i++) {
+                                        routeout_copy->push_back(routeout->at(i));
+                                    }
+                                    
+                                    // Add the path from core to destination aggregation switch
+                                    routeout_copy->push_back(queues_nc_nup[core][upper2][b2_down]);
+                                    routeout_copy->push_back(pipes_nc_nup[core][upper2][b2_down]);
 
                                     if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                                        routeback->push_back(queues_nlp_nup[HOST_POD_SWITCH(local_dest)][upper2][b1_down]->getRemoteEndpoint());
-        
-                                    routeback->push_back(queues_nup_nc[upper2][core][b2_down]);
-                                    routeback->push_back(pipes_nup_nc[upper2][core][b2_down]);
+                                        routeout_copy->push_back(queues_nc_nup[core][upper2][b2_down]->getRemoteEndpoint());        
+
+                                    routeout_copy->push_back(queues_nup_nlp[upper2][HOST_POD_SWITCH(local_dest)][b1_down]);
+                                    routeout_copy->push_back(pipes_nup_nlp[upper2][HOST_POD_SWITCH(local_dest)][b1_down]);
 
                                     if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                                        routeback->push_back(queues_nup_nc[upper2][core][b2_down]->getRemoteEndpoint());
+                                        routeout_copy->push_back(queues_nup_nlp[upper2][HOST_POD_SWITCH(local_dest)][b1_down]->getRemoteEndpoint());
         
-                                    //now take the only link back down to the src server!
-        
-                                    routeback->push_back(queues_nc_nup[core][upper][b2_up]);
-                                    routeback->push_back(pipes_nc_nup[core][upper][b2_up]);
+                                    routeout_copy->push_back(queues_nlp_ns[HOST_POD_SWITCH(local_dest)][local_dest][0]);
+                                    routeout_copy->push_back(pipes_nlp_ns[HOST_POD_SWITCH(local_dest)][local_dest][0]);
 
-                                    if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                                        routeback->push_back(queues_nc_nup[core][upper][b2_up]->getRemoteEndpoint());
-        
-                                    routeback->push_back(queues_nup_nlp[upper][HOST_POD_SWITCH(local_src)][b1_up]);
-                                    routeback->push_back(pipes_nup_nlp[upper][HOST_POD_SWITCH(local_src)][b1_up]);
+                                    if (reverse) {
+                                        // reverse path for RTS packets
+                                        Route* routeback_copy = new Route();
+            
+                                        routeback_copy->push_back(queues_ns_nlp[local_dest][HOST_POD_SWITCH(local_dest)][0]);
+                                        routeback_copy->push_back(pipes_ns_nlp[local_dest][HOST_POD_SWITCH(local_dest)][0]);
 
-                                    if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
-                                        routeback->push_back(queues_nup_nlp[upper][HOST_POD_SWITCH(local_src)][b1_up]->getRemoteEndpoint());
-        
-                                    routeback->push_back(queues_nlp_ns[HOST_POD_SWITCH(local_src)][local_src][0]);
-                                    routeback->push_back(pipes_nlp_ns[HOST_POD_SWITCH(local_src)][local_src][0]);
+                                        if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
+                                            routeback_copy->push_back(queues_ns_nlp[local_dest][HOST_POD_SWITCH(local_dest)][0]->getRemoteEndpoint());
+            
+                                        routeback_copy->push_back(queues_nlp_nup[HOST_POD_SWITCH(local_dest)][upper2][b1_down]);
+                                        routeback_copy->push_back(pipes_nlp_nup[HOST_POD_SWITCH(local_dest)][upper2][b1_down]);
+
+                                        if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
+                                            routeback_copy->push_back(queues_nlp_nup[HOST_POD_SWITCH(local_dest)][upper2][b1_down]->getRemoteEndpoint());
+            
+                                        routeback_copy->push_back(queues_nup_nc[upper2][core][b2_down]);
+                                        routeback_copy->push_back(pipes_nup_nc[upper2][core][b2_down]);
+
+                                        if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
+                                            routeback_copy->push_back(queues_nup_nc[upper2][core][b2_down]->getRemoteEndpoint());
+            
+                                        //now take the only link back down to the src server!
+            
+                                        routeback_copy->push_back(queues_nc_nup[core][upper][b2_up]);
+                                        routeback_copy->push_back(pipes_nc_nup[core][upper][b2_up]);
+
+                                        if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
+                                            routeback_copy->push_back(queues_nc_nup[core][upper][b2_up]->getRemoteEndpoint());
+            
+                                        routeback_copy->push_back(queues_nup_nlp[upper][HOST_POD_SWITCH(local_src)][b1_up]);
+                                        routeback_copy->push_back(pipes_nup_nlp[upper][HOST_POD_SWITCH(local_src)][b1_up]);
+
+                                        if (_qt==LOSSLESS_INPUT || _qt==LOSSLESS_INPUT_ECN)
+                                            routeback_copy->push_back(queues_nup_nlp[upper][HOST_POD_SWITCH(local_src)][b1_up]->getRemoteEndpoint());
+            
+                                        routeback_copy->push_back(queues_nlp_ns[HOST_POD_SWITCH(local_src)][local_src][0]);
+                                        routeback_copy->push_back(pipes_nlp_ns[HOST_POD_SWITCH(local_src)][local_src][0]);
 
 
-                                    routeout->set_reverse(routeback);
-                                    routeback->set_reverse(routeout);
+                                        routeout_copy->set_reverse(routeback_copy);
+                                        routeback_copy->set_reverse(routeout_copy);
+                                    }
+            
+                                    //print_route(*routeout_copy);
+                                    paths->push_back(routeout_copy);
+                                    check_non_null(routeout_copy);
                                 }
-        
-                                //print_route(*routeout);
-                                paths->push_back(routeout);
-                                check_non_null(routeout);
+                                
+                                // Delete the original routeout since we've created copies for each destination aggregation switch
+                                delete routeout;
                             }
                         }
                     }
