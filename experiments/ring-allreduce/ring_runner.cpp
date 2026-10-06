@@ -11,6 +11,7 @@
 #include "trigger.h"
 
 #include <cmath>
+#include <cstdlib>
 #include <iostream>
 #include <map>
 #include <sstream>
@@ -39,13 +40,24 @@ static string sanitize(const string& s) {
     return out;
 }
 
-static int spine_for(const RingRunConfig& cfg, uint32_t src, string& error) {
+static int spine_for(const RingRunConfig& cfg, FatTreeTopology* top,
+                     uint32_t src, uint32_t dst, string& error) {
     if (cfg.experiment == 1) {
         if (cfg.pin != "none") {
             error = "experiment 1 does not pin a spine";
             return -1;
         }
         return -1;
+    }
+    if (cfg.experiment == 3) {
+        // Same rule for every pair: the one same-leaf path, or spine = src % 2.
+        if (cfg.pin != "srcmod2") {
+            error = "experiment 3 pin must be srcmod2";
+            return -1;
+        }
+        if (top->HOST_POD_SWITCH(src) == top->HOST_POD_SWITCH(dst))
+            return -1;
+        return (int)(src % 2);
     }
     if (cfg.mode == "p2p") {
         if (cfg.pin != "spine0") {
@@ -60,6 +72,61 @@ static int spine_for(const RingRunConfig& cfg, uint32_t src, string& error) {
         return (int)(src % 2);
     error = "experiment 2 collective pin must be spread or stack";
     return -1;
+}
+
+static bool parse_ring(const string& text, uint32_t n, vector<uint32_t>& ring, string& error) {
+    ring.clear();
+    string cur;
+    for (size_t i = 0; i <= text.size(); i++) {
+        if (i == text.size() || text[i] == '-') {
+            if (cur.empty()) {
+                error = "empty ring hop";
+                return false;
+            }
+            ring.push_back((uint32_t)atoi(cur.c_str()));
+            cur.clear();
+        } else if (text[i] >= '0' && text[i] <= '9') {
+            cur.push_back(text[i]);
+        } else {
+            error = "ring must be hyphenated host ids";
+            return false;
+        }
+    }
+    if (ring.size() != n || ring[0] != 0) {
+        error = "ring must be n hosts starting at 0";
+        return false;
+    }
+    vector<int> seen(n, 0);
+    for (size_t i = 0; i < ring.size(); i++) {
+        if (ring[i] >= n || seen[ring[i]]) {
+            error = "ring is not a permutation of the hosts";
+            return false;
+        }
+        seen[ring[i]] = 1;
+    }
+    return true;
+}
+
+static string ring_text(const vector<uint32_t>& ring) {
+    ostringstream out;
+    for (size_t i = 0; i < ring.size(); i++) {
+        if (i)
+            out << "-";
+        out << ring[i];
+    }
+    if (!ring.empty())
+        out << "-" << ring[0];
+    return out.str();
+}
+
+static string reverse_ring_text(const vector<uint32_t>& ring) {
+    vector<uint32_t> rev;
+    if (ring.empty())
+        return "";
+    rev.push_back(ring[0]);
+    for (size_t i = ring.size(); i > 1; i--)
+        rev.push_back(ring[i - 1]);
+    return ring_text(rev);
 }
 
 static void walk_queues(vector< vector< vector<BaseQueue*> > >& vec,
@@ -117,6 +184,17 @@ static FatTreeTopology* build_topology(const RingRunConfig& cfg, EventList& even
         tor_down = 2;
         tor_up = 2;
         agg_down = 2;
+    } else if (cfg.experiment == 3) {
+        if (cfg.n != 6) {
+            error = "experiment 3 is the 6-host three-leaf topology";
+            return NULL;
+        }
+        // Three leaves of two hosts, two spines. Six uplinks and radix_down 3
+        // on the spine tier give two aggregation switches.
+        nodes = 6;
+        tor_down = 2;
+        tor_up = 2;
+        agg_down = 3;
     } else {
         error = "experiment must be 1 or 2";
         return NULL;
@@ -138,10 +216,64 @@ struct LiveFlow {
     int step;
 };
 
+static int run_tsp(const RingRunConfig& cfg) {
+    string error;
+    if (cfg.experiment != 3 || cfg.n != 6) {
+        cerr << "tsp mode is the experiment 3 cost matrix\n";
+        return 1;
+    }
+    EventList eventlist;
+    srand(cfg.seed);
+    Packet::set_packet_size(cfg.mtu);
+    FatTreeTopology* top = build_topology(cfg, eventlist, error);
+    if (!top) {
+        cerr << error << "\n";
+        return 1;
+    }
+    vector<uint32_t> hosts;
+    vector<vector<double> > cost(cfg.n, vector<double>(cfg.n, 0));
+    for (uint32_t h = 0; h < cfg.n; h++)
+        hosts.push_back(h);
+    for (uint32_t src = 0; src < cfg.n; src++) {
+        for (uint32_t dst = 0; dst < cfg.n; dst++) {
+            if (src == dst)
+                continue;
+            int spine = spine_for(cfg, top, src, dst, error);
+            if (!error.empty()) {
+                cerr << error << "\n";
+                return 1;
+            }
+            PinnedRoute route = pin_host_route(top, src, dst, spine, error);
+            if (!error.empty()) {
+                cerr << error << "\n";
+                return 1;
+            }
+            cost[src][dst] = (double)route.propagation;
+        }
+    }
+    TspPlanner planner(cost);
+    vector<uint32_t> ring = planner.ring(hosts);
+    if (ring.size() != cfg.n) {
+        cerr << "tsp planner returned no ring\n";
+        return 1;
+    }
+    uint64_t static_cost = 0;
+    for (size_t i = 0; i < ring.size(); i++)
+        static_cost += (uint64_t)cost[ring[i]][ring[(i + 1) % ring.size()]];
+    cout << "RECORD mode=tsp experiment=3 pin=" << cfg.pin
+         << " planner=tsp_static_cost ring=" << ring_text(ring)
+         << " reverse=" << reverse_ring_text(ring)
+         << " static_cost_ps=" << static_cost
+         << " seed=" << cfg.seed << "\n";
+    return 0;
+}
+
 int run_ring_experiment(const RingRunConfig& cfg) {
     string error;
+    if (cfg.mode == "tsp")
+        return run_tsp(cfg);
     if (cfg.mode != "p2p" && cfg.mode != "collective") {
-        cerr << "mode must be p2p or collective\n";
+        cerr << "mode must be p2p, collective, or tsp\n";
         return 1;
     }
     if (cfg.bytes == 0 || cfg.mtu <= 0 || (cfg.bytes % (uint64_t)cfg.mtu) != 0) {
@@ -168,6 +300,7 @@ int run_ring_experiment(const RingRunConfig& cfg) {
         hosts.push_back(h);
 
     vector<ScheduledTransfer> transfers;
+    vector<uint32_t> ring_order;
     string planner_name = "p2p";
     if (cfg.mode == "p2p") {
         ScheduledTransfer t;
@@ -176,25 +309,35 @@ int run_ring_experiment(const RingRunConfig& cfg) {
         if (cfg.experiment == 1) {
             t.src = 0;
             t.dst = 1;
+        } else if (cfg.experiment == 3) {
+            if (cfg.src < 0 || cfg.dst < 0) {
+                cerr << "experiment 3 point-to-point needs --src and --dst\n";
+                return 1;
+            }
+            t.src = (uint32_t)cfg.src;
+            t.dst = (uint32_t)cfg.dst;
         } else {
             t.src = 0;
             t.dst = 2;
         }
         transfers.push_back(t);
     } else {
-        vector<uint32_t> ring;
         if (cfg.experiment == 1) {
             RankOrderPlanner planner;
-            ring = planner.ring(hosts);
+            ring_order = planner.ring(hosts);
             planner_name = planner.name();
+        } else if (cfg.experiment == 3) {
+            if (!parse_ring(cfg.ring, cfg.n, ring_order, error)) {
+                cerr << error << "\n";
+                return 1;
+            }
+            planner_name = "fixed";
         } else {
             uint32_t fixed_hosts[] = {0, 2, 1, 3};
-            vector<uint32_t> fixed(fixed_hosts, fixed_hosts + 4);
-            FixedRingPlanner planner(fixed);
-            ring = planner.ring(hosts);
-            planner_name = planner.name();
+            ring_order.assign(fixed_hosts, fixed_hosts + 4);
+            planner_name = "fixed";
         }
-        transfers = ring_allreduce_schedule(ring, cfg.bytes, error);
+        transfers = ring_allreduce_schedule(ring_order, cfg.bytes, error);
         if (!error.empty()) {
             cerr << error << "\n";
             return 1;
@@ -213,7 +356,7 @@ int run_ring_experiment(const RingRunConfig& cfg) {
         pair<uint32_t, uint32_t> key(transfers[i].src, transfers[i].dst);
         if (pinned.find(key) != pinned.end())
             continue;
-        int spine = spine_for(cfg, transfers[i].src, error);
+        int spine = spine_for(cfg, top, transfers[i].src, transfers[i].dst, error);
         if (!error.empty()) {
             cerr << error << "\n";
             return 1;
@@ -235,23 +378,45 @@ int run_ring_experiment(const RingRunConfig& cfg) {
     int expect_pipes = (cfg.experiment == 1) ? 2 : 4;
     simtime_picosec prop0 = unique_edges[0].propagation;
     double bps0 = unique_edges[0].bytes_per_sec;
+    int shortcuts = 0;
+    simtime_picosec max_prop = 0;
     for (size_t i = 0; i < unique_edges.size(); i++) {
-        if (unique_edges[i].pipes != expect_pipes) {
-            cerr << "path length mismatch on " << unique_edges[i].src << "->" << unique_edges[i].dst
-                 << " pipes " << unique_edges[i].pipes << " expected " << expect_pipes << "\n";
-            return 1;
-        }
-        if (unique_edges[i].propagation != prop0 || unique_edges[i].bytes_per_sec != bps0) {
-            cerr << "ring edges do not have identical path characteristics\n";
-            return 1;
-        }
-        if (cfg.experiment == 1 && top->HOST_POD_SWITCH(unique_edges[i].src) != top->HOST_POD_SWITCH(unique_edges[i].dst)) {
-            cerr << "experiment 1 edge left the leaf\n";
-            return 1;
-        }
-        if (cfg.experiment == 2 && top->HOST_POD_SWITCH(unique_edges[i].src) == top->HOST_POD_SWITCH(unique_edges[i].dst)) {
-            cerr << "experiment 2 edge stayed on one leaf\n";
-            return 1;
+        const PinnedRoute& edge = unique_edges[i];
+        bool same = top->HOST_POD_SWITCH(edge.src) == top->HOST_POD_SWITCH(edge.dst);
+        if (edge.propagation > max_prop)
+            max_prop = edge.propagation;
+        if (same)
+            shortcuts++;
+        if (cfg.experiment == 3) {
+            int want_pipes = same ? 2 : 4;
+            int want_spine = same ? -1 : (int)(edge.src % 2);
+            if (edge.pipes != want_pipes || edge.spine != want_spine) {
+                cerr << "experiment 3 route " << edge.src << "->" << edge.dst
+                     << " pipes " << edge.pipes << " spine " << edge.spine << "\n";
+                return 1;
+            }
+            if (edge.bytes_per_sec != bps0) {
+                cerr << "experiment 3 edges do not share a link rate\n";
+                return 1;
+            }
+        } else {
+            if (edge.pipes != expect_pipes) {
+                cerr << "path length mismatch on " << edge.src << "->" << edge.dst
+                     << " pipes " << edge.pipes << " expected " << expect_pipes << "\n";
+                return 1;
+            }
+            if (edge.propagation != prop0 || edge.bytes_per_sec != bps0) {
+                cerr << "ring edges do not have identical path characteristics\n";
+                return 1;
+            }
+            if (cfg.experiment == 1 && !same) {
+                cerr << "experiment 1 edge left the leaf\n";
+                return 1;
+            }
+            if (cfg.experiment == 2 && same) {
+                cerr << "experiment 2 edge stayed on one leaf\n";
+                return 1;
+            }
         }
     }
 
@@ -259,11 +424,12 @@ int run_ring_experiment(const RingRunConfig& cfg) {
     int expect_l = 1;
     if (cfg.mode == "collective" && cfg.experiment == 2 && cfg.pin == "stack")
         expect_l = 2;
-    if (overlap.l_max != expect_l) {
+    if (cfg.experiment != 3 && overlap.l_max != expect_l) {
         cerr << "L_max is " << overlap.l_max << ", expected " << expect_l << "\n";
         return 1;
     }
-    double h_expect = (double)expect_l * (double)chunk / bps0;
+    double h_denom = (cfg.experiment == 3) ? (double)overlap.l_max : (double)expect_l;
+    double h_expect = h_denom * (double)chunk / bps0;
     if (!(h_expect > 0) || fabs(overlap.h_max_s - h_expect) / h_expect > 1e-6) {
         cerr << "H_max " << overlap.h_max_s << " does not match L_max * (s/n) / C = " << h_expect << "\n";
         return 1;
@@ -368,7 +534,7 @@ int run_ring_experiment(const RingRunConfig& cfg) {
         && rtx == 0 && nacks == 0 && pauses == 0 && gaps == 0
         && tmax > 0;
 
-    double alpha_th = timeAsSec(prop0);
+    double alpha_th = timeAsSec(cfg.experiment == 3 ? max_prop : prop0);
     double beta_th = 1.0 / bps0;
     double t_sim = timeAsSec(tmax);
     double t_theory = 0;
@@ -377,12 +543,34 @@ int run_ring_experiment(const RingRunConfig& cfg) {
     double slow_fit = 0;
     if (cfg.mode == "collective") {
         double steps_d = 2.0 * (double)(cfg.n - 1);
-        t_theory = steps_d * alpha_th + steps_d / (double)cfg.n * (double)cfg.bytes * beta_th;
-        if (cfg.has_fit) {
-            t_fit = steps_d * cfg.alpha_fit_s + steps_d / (double)cfg.n * (double)cfg.bytes * cfg.beta_fit_s_per_byte;
-            if (t_fit > 0)
-                slow_fit = t_sim / t_fit;
+        if (cfg.experiment == 3) {
+            // Every step runs the same n edges. The barrier waits for the slowest one.
+            double slowest = 0;
+            for (size_t i = 0; i < unique_edges.size(); i++) {
+                double step = timeAsSec(unique_edges[i].propagation)
+                    + (double)chunk / unique_edges[i].bytes_per_sec;
+                if (step > slowest)
+                    slowest = step;
+            }
+            t_theory = steps_d * slowest;
+            if (cfg.has_class_fit) {
+                double slowest_fit = 0;
+                for (size_t i = 0; i < unique_edges.size(); i++) {
+                    bool same = unique_edges[i].pipes == 2;
+                    double step = (same ? cfg.alpha_same_s : cfg.alpha_cross_s)
+                        + (double)chunk * (same ? cfg.beta_same_s_per_byte : cfg.beta_cross_s_per_byte);
+                    if (step > slowest_fit)
+                        slowest_fit = step;
+                }
+                t_fit = steps_d * slowest_fit;
+            }
+        } else {
+            t_theory = steps_d * alpha_th + steps_d / (double)cfg.n * (double)cfg.bytes * beta_th;
+            if (cfg.has_fit)
+                t_fit = steps_d * cfg.alpha_fit_s + steps_d / (double)cfg.n * (double)cfg.bytes * cfg.beta_fit_s_per_byte;
         }
+        if (t_fit > 0)
+            slow_fit = t_sim / t_fit;
         if (t_theory > 0)
             slow_th = t_sim / t_theory;
     }
@@ -391,22 +579,14 @@ int run_ring_experiment(const RingRunConfig& cfg) {
     string peak_name = peak ? peak->name : "none";
     mem_b peak_bytes = peak ? peak->peak_bytes : 0;
 
-    ostringstream ring_s;
+    string ring_s;
+    string reverse_s = "na";
     if (cfg.mode == "collective") {
-        vector<uint32_t> shown;
-        if (cfg.experiment == 1)
-            shown = hosts;
-        else {
-            shown.push_back(0); shown.push_back(2); shown.push_back(1); shown.push_back(3);
-        }
-        for (size_t i = 0; i < shown.size(); i++) {
-            if (i)
-                ring_s << "-";
-            ring_s << shown[i];
-        }
-        ring_s << "-" << shown[0];
+        ring_s = ring_text(ring_order);
+        if (cfg.experiment == 3)
+            reverse_s = reverse_ring_text(ring_order);
     } else {
-        ring_s << transfers[0].src << "-" << transfers[0].dst;
+        ring_s = to_string(transfers[0].src) + "-" + to_string(transfers[0].dst);
     }
 
     cout << "RECORD"
@@ -430,8 +610,8 @@ int run_ring_experiment(const RingRunConfig& cfg) {
          << " hop_us=" << HOP_US
          << " queue_bytes=" << cfg.queue_bytes
          << " seed=" << cfg.seed
-         << " ring=" << ring_s.str()
-         << " pipes=" << expect_pipes
+         << " ring=" << ring_s
+         << " pipes=" << (cfg.experiment == 3 ? string("mixed") : to_string(expect_pipes))
          << " alpha_theory_s=" << sci(alpha_th)
          << " beta_theory_s_per_byte=" << sci(beta_th)
          << " alpha_fit_s=" << (cfg.has_fit ? sci(cfg.alpha_fit_s) : string("na"))
@@ -457,8 +637,16 @@ int run_ring_experiment(const RingRunConfig& cfg) {
          << " sink_gaps=" << gaps
          << " flows_done=" << finished
          << " flows_expected=" << flows.size()
-         << " valid=" << (valid ? 1 : 0)
-         << "\n";
+         << " valid=" << (valid ? 1 : 0);
+    if (cfg.experiment == 3) {
+        cout << " shortcuts=" << shortcuts
+             << " reverse=" << reverse_s
+             << " alpha_same_s=" << (cfg.has_class_fit ? sci(cfg.alpha_same_s) : string("na"))
+             << " beta_same_s_per_byte=" << (cfg.has_class_fit ? sci(cfg.beta_same_s_per_byte) : string("na"))
+             << " alpha_cross_s=" << (cfg.has_class_fit ? sci(cfg.alpha_cross_s) : string("na"))
+             << " beta_cross_s_per_byte=" << (cfg.has_class_fit ? sci(cfg.beta_cross_s_per_byte) : string("na"));
+    }
+    cout << "\n";
 
     cerr << "t_sim_us " << timeAsUs(tmax)
          << " valid " << (valid ? 1 : 0)

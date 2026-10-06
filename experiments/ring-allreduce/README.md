@@ -80,3 +80,13 @@ That generator is drawn three times on this path: each switch's hash salt during
 ## What this is not
 
 This schedule is the homogeneous α-β ring: `n` transfers run together, and the next step starts only after all of them finish. It is not an NCCL pipeline, and chunks are not sent ahead across steps. Routes are pinned, including the ACK path; there is no ECMP, spraying, or PLB. The sender is fixed-rate RoCE at the 10 Gbps link rate, paced with the 64-byte ACK included in the gap, plus that jitter. ECN and PFC are off. A usable row has `valid=1`, so the recorded time contains no loss recovery. Switch latency is 0. α theory is forward propagation only; the fitted α is larger because completion includes pacing and the ACK return.
+
+## Experiment 3A
+
+Six hosts on three leaves of two, and two spines. Same 10 Gbps links and 1 µs hops. Cross-leaf routes use `spine = src % 2`. `c_ij` is that pinned forward propagation: 2 µs on a leaf, 4 µs across leaves. The search is all 120 directed rings with host 0 fixed. A ring and its reverse are both run, because the pin rule can put them on different spines.
+
+```bash
+python3 ring_experiment3.py
+```
+
+The message is `3456000` bytes. The script fits the same-leaf pair `0→1` and the cross-leaf pair `0→2`, asks `TspPlanner` which ring it selects, then runs every directed ring. Results go to `ring_results/experiment3.csv`. The fitted prediction is `2(n-1)` times the slowest edge's `α + (s/n)β`, so on this topology it is the same number for every ring.

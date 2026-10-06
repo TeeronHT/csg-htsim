@@ -9,15 +9,25 @@
 // parameters are process-wide, so calibration and each experiment are
 // separate invocations of this function.
 struct RingRunConfig {
-    int experiment;          // 1: one leaf. 2: two leaves, two spines.
-    std::string mode;        // "p2p" or "collective"
-    std::string pin;         // "none", "spread", "stack", "spine0"
+    int experiment;          // 1: one leaf. 2: two leaves. 3: three leaves, six hosts.
+    std::string mode;        // "p2p", "collective", or "tsp"
+    std::string pin;         // "none", "spread", "stack", "spine0", "srcmod2"
+    std::string ring;        // hyphenated host order for experiment 3, starting at 0
+    int src;                 // experiment 3 point-to-point endpoints; -1 otherwise
+    int dst;
     uint32_t n;
     uint64_t bytes;
     uint64_t queue_bytes;
     double alpha_fit_s;     // meaningful only when has_fit is set
     double beta_fit_s_per_byte;
     bool has_fit;
+    // Experiment 3 has two route classes. The step prediction is the
+    // slowest pinned edge, not one alpha for the whole ring.
+    double alpha_same_s;
+    double beta_same_s_per_byte;
+    double alpha_cross_s;
+    double beta_cross_s_per_byte;
+    bool has_class_fit;
     unsigned seed;
     int mtu;
 };

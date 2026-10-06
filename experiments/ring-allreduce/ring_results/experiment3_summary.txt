@@ -1,0 +1,31 @@
+Experiment 3A
+  same-leaf fit  alpha_us 18.907683  beta_ns_per_byte 0.845420
+  cross-leaf fit alpha_us 37.745199  beta_ns_per_byte 0.843709
+  rings 120  valid 120
+  minimum static cost 18.000 us, 16 rings
+    L_max values [1]
+    T_sim us 5253.405 .. 5261.638
+  Held-Karp selected 0-5-4-3-2-1-0
+    C_us 18.000  T_sim_us 5260.885  L_max 1  in minimum-cost set yes  strict runtime minimum no
+  strict minimum runtime 5253.405 us, 2 rings
+    0-2-3-4-5-1-0  C_us 18.000  L_max 1
+    0-4-5-2-3-1-0  C_us 18.000  L_max 1
+  rings within 1% of the minimum runtime: 66
+  Held-Karp ring is a strict runtime minimum: no
+  Spearman rank correlation with T_sim
+    static cost 0.5245
+    L_max       0.8619
+    H_max       0.8619
+  runtime by static-cost bucket
+    C_us 18.000  n=16  T_us 5253.405 .. 5261.638  median 5260.737  L=1 n=16 T_us 5253.405..5261.638
+    C_us 20.000  n=24  T_us 5258.565 .. 9689.259  median 9687.802  L=1 n=12 T_us 5258.565..5264.282; L=2 n=12 T_us 9687.802..9689.259
+    C_us 22.000  n=48  T_us 5256.011 .. 9689.846  median 9688.144  L=1 n=24 T_us 5256.011..5273.960; L=2 n=24 T_us 9688.144..9689.846
+    C_us 24.000  n=32  T_us 5263.781 .. 9690.828  median 9689.390  L=1 n=14 T_us 5263.781..5269.933; L=2 n=18 T_us 9689.123..9690.828
+  runtime by L_max
+    L_max 1  n=66  T_us 5253.405 .. 5273.960  median 5262.036
+    L_max 2  n=54  T_us 9687.802 .. 9690.828  median 9689.123
+  pairs with C(A)<C(B) but T_sim(A)>T_sim(B): 1328
+    largest gap 4433.248 us: 0-3-5-4-2-1-0 (C 20.000 us, T 9689.259 us, L 2) slower than 0-1-2-4-3-5-0 (C 22.000 us, T 5256.011 us, L 1)
+  reverse pairs with equal static cost
+    pairs 60  relative gap above 1%: 18
+    largest gap 84.25%: 0-2-1-5-4-3-0 T_us 9688.429 L 2 vs 0-3-4-5-1-2-0 T_us 5258.287 L 1
