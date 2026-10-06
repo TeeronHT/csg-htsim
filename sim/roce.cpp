@@ -62,7 +62,10 @@ RoceSrc::RoceSrc(RoceLogger* logger, TrafficLogger* pktlogger, EventList &eventl
     _node_num = _global_node_count++;
     _nodename = "rocesrc " + to_string(_node_num);
 
-    srand(time(NULL));
+    // Original RoCE reseeded every sender from the wall clock, so two runs
+    // of the same configuration could differ. Left commented so that
+    // behavior can be restored by uncommenting this line.
+    // srand(time(NULL));
     _pathid = random()%256;
 
     //cout << _nodename << " path id is " << _pathid << endl;
