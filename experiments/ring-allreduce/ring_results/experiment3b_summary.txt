@@ -1,0 +1,77 @@
+Experiment 3B
+  same-site fit  0->1  alpha_us 22.594668  beta_ns_per_byte 0.845021
+  inter-site fit 0->3  alpha_us 28.111788  beta_ns_per_byte 0.847575
+  isolated chunk step  same-site 509.327 us  inter-site 516.315 us  slower class: inter-site
+  pairwise prediction uses the slower class present in each ring
+  rings 120  valid 120
+9. every row valid with zero loss/recovery/control effects: yes
+
+1. minimum static cost 18.000 us, 12 rings, all L_max [3]
+   T_sim us 14300.534 .. 14300.534
+   0-3-1-4-2-5-0  inter_site 6  L_max 3  T_sim_us 14300.534
+   0-3-1-5-2-4-0  inter_site 6  L_max 3  T_sim_us 14300.534
+   0-3-2-4-1-5-0  inter_site 6  L_max 3  T_sim_us 14300.534
+   0-3-2-5-1-4-0  inter_site 6  L_max 3  T_sim_us 14300.534
+   0-4-1-3-2-5-0  inter_site 6  L_max 3  T_sim_us 14300.534
+   0-4-1-5-2-3-0  inter_site 6  L_max 3  T_sim_us 14300.534
+   0-4-2-3-1-5-0  inter_site 6  L_max 3  T_sim_us 14300.534
+   0-4-2-5-1-3-0  inter_site 6  L_max 3  T_sim_us 14300.534
+   0-5-1-3-2-4-0  inter_site 6  L_max 3  T_sim_us 14300.534
+   0-5-1-4-2-3-0  inter_site 6  L_max 3  T_sim_us 14300.534
+   0-5-2-3-1-4-0  inter_site 6  L_max 3  T_sim_us 14300.534
+   0-5-2-4-1-3-0  inter_site 6  L_max 3  T_sim_us 14300.534
+2. minimum simulated completion time 5156.527 us, 12 rings
+   0-1-3-4-5-2-0  C_us 22.000  inter_site 2  L_max 1
+   0-1-3-5-4-2-0  C_us 22.000  inter_site 2  L_max 1
+   0-1-4-3-5-2-0  C_us 22.000  inter_site 2  L_max 1
+   0-1-4-5-3-2-0  C_us 22.000  inter_site 2  L_max 1
+   0-1-5-3-4-2-0  C_us 22.000  inter_site 2  L_max 1
+   0-1-5-4-3-2-0  C_us 22.000  inter_site 2  L_max 1
+   0-2-3-4-5-1-0  C_us 22.000  inter_site 2  L_max 1
+   0-2-3-5-4-1-0  C_us 22.000  inter_site 2  L_max 1
+   0-2-4-3-5-1-0  C_us 22.000  inter_site 2  L_max 1
+   0-2-4-5-3-1-0  C_us 22.000  inter_site 2  L_max 1
+   0-2-5-3-4-1-0  C_us 22.000  inter_site 2  L_max 1
+   0-2-5-4-3-1-0  C_us 22.000  inter_site 2  L_max 1
+3. minimum-static-cost set overlaps the minimum-runtime set: no
+4. Held-Karp selected 0-5-2-4-1-3-0
+   C_us 18.000  inter_site 6  L_max 3  H_max_us 1382.400  T_sim_us 14300.534  T_fit_us 5163.149  slowdown 2.7697
+   in minimum-cost set: yes
+5. fastest uncontended ring (L_max=1), T_sim_us 5156.527, 12 rings
+   0-1-3-4-5-2-0  C_us 22.000  inter_site 2
+   0-1-3-5-4-2-0  C_us 22.000  inter_site 2
+   0-1-4-3-5-2-0  C_us 22.000  inter_site 2
+   0-1-4-5-3-2-0  C_us 22.000  inter_site 2
+   0-1-5-3-4-2-0  C_us 22.000  inter_site 2
+   0-1-5-4-3-2-0  C_us 22.000  inter_site 2
+   0-2-3-4-5-1-0  C_us 22.000  inter_site 2
+   0-2-3-5-4-1-0  C_us 22.000  inter_site 2
+   0-2-4-3-5-1-0  C_us 22.000  inter_site 2
+   0-2-4-5-3-1-0  C_us 22.000  inter_site 2
+   0-2-5-3-4-1-0  C_us 22.000  inter_site 2
+   0-2-5-4-3-1-0  C_us 22.000  inter_site 2
+6. penalty of the Held-Karp ring versus the fastest uncontended ring
+   absolute 9144.008 us  ratio 2.7733  (T_hk / T_uncontended)
+   versus the global minimum runtime: 9144.008 us  ratio 2.7733
+7. Spearman rank correlation with T_sim
+   static cost -0.8739
+   L_max       0.8739
+   H_max       0.8739
+8. peak fiber queue occupancy by contention class
+   L_max 1  n=36  fiber_peak_bytes 9128 .. 18192  median 18192
+   L_max 2  n=72  fiber_peak_bytes 571096 .. 571160  median 571160
+   L_max 3  n=12  fiber_peak_bytes 1151256 .. 1151256  median 1151256
+
+structural classes
+  C_us 18  L_max 3  n=12  inter_site [6]
+    T_sim_us 14300.534 .. 14300.534  median 14300.534
+    T_fit_us 5163.149  slowdown 2.7697 .. 2.7697
+    fiber_peak_bytes 1151256 .. 1151256  peak_queue_bytes 1151256 .. 1151256
+  C_us 20  L_max 2  n=72  inter_site [4]
+    T_sim_us 9627.790 .. 9628.754  median 9628.310
+    T_fit_us 5163.149  slowdown 1.8647 .. 1.8649
+    fiber_peak_bytes 571096 .. 571160  peak_queue_bytes 571096 .. 571160
+  C_us 22  L_max 1  n=36  inter_site [2]
+    T_sim_us 5156.527 .. 5162.179  median 5158.601
+    T_fit_us 5163.149  slowdown 0.9987 .. 0.9998
+    fiber_peak_bytes 9128 .. 18192  peak_queue_bytes 18192 .. 18192

@@ -90,3 +90,13 @@ python3 ring_experiment3.py
 ```
 
 The message is `3456000` bytes. The script fits the same-leaf pair `0→1` and the cross-leaf pair `0→2`, asks `TspPlanner` which ring it selects, then runs every directed ring. Results go to `ring_results/experiment3.csv`. The fitted prediction is `2(n-1)` times the slowest edge's `α + (s/n)β`, so on this topology it is the same number for every ring.
+
+## Experiment 3B
+
+Same six hosts, message, chunk, queue, seed, and round-synchronous RoCE schedule. The graph is no longer a fat tree. Hosts 0, 1, 2 sit at the left site and 3, 4, 5 at the right. A same-site transfer is host, site switch, host: two 2 µs hops, 4 µs. An inter-site transfer is host, border, the single fiber, the other border, host: three 1 µs hops, 3 µs. The border does not hairpin, so the pin is that unique path. `--experiment 4` selects this graph; the `RECORD` line says `experiment=3b`.
+
+```bash
+python3 ring_experiment3b.py
+```
+
+The script fits same-site `0→1` and inter-site `0→3` separately, then runs Held-Karp and all 120 directed rings. Results go to `ring_results/experiment3b.csv`. The fitted prediction is still `2(n-1)` times the slower edge class that actually appears in that ring.

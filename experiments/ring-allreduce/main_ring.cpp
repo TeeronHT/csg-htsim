@@ -15,7 +15,7 @@
 
 static void usage(const char* prog) {
     std::cerr << "Usage: " << prog
-              << " --mode p2p|collective|tsp --experiment 1|2|3 --bytes N\n"
+              << " --mode p2p|collective|tsp --experiment 1|2|3|4 --bytes N\n"
               << "       [--n 4] [--pin none|spread|stack|spine0|srcmod2]\n"
               << "       [--ring 0-1-2-3-4-5] [--src I --dst J]\n"
               << "       [--queue-bytes N] [--mtu 9000] [--seed 1]\n"
@@ -99,7 +99,9 @@ int main(int argc, char** argv) {
         return 1;
     }
     if (cfg.pin.empty()) {
-        if (cfg.experiment == 3)
+        if (cfg.experiment == 4)
+            cfg.pin = "shortest";
+        else if (cfg.experiment == 3)
             cfg.pin = "srcmod2";
         else
             cfg.pin = (cfg.experiment == 2 && cfg.mode == "p2p") ? "spine0" : "none";

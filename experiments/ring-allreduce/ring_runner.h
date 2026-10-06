@@ -9,7 +9,7 @@
 // parameters are process-wide, so calibration and each experiment are
 // separate invocations of this function.
 struct RingRunConfig {
-    int experiment;          // 1: one leaf. 2: two leaves. 3: three leaves, six hosts.
+    int experiment;          // 1: one leaf. 2: two leaves. 3: three-leaf fat tree. 4: two-site fiber.
     std::string mode;        // "p2p", "collective", or "tsp"
     std::string pin;         // "none", "spread", "stack", "spine0", "srcmod2"
     std::string ring;        // hyphenated host order for experiment 3, starting at 0

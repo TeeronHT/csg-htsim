@@ -294,10 +294,10 @@ def main():
         if int(rec["static_cost_ps"]) == min_c:
             rec["min_static_cost"] = "1"
 
-    csv_path = os.path.join(OUTDIR, "experiment3.csv")
+    csv_path = os.path.join(OUTDIR, "experiment3a.csv")
     write_csv(csv_path, results)
     text = summarize(results, tsp_ring, a_same, b_same, a_cross, b_cross)
-    summary_path = os.path.join(OUTDIR, "experiment3_summary.txt")
+    summary_path = os.path.join(OUTDIR, "experiment3a_summary.txt")
     with open(summary_path, "w") as f:
         f.write(text)
     print("Wrote %s" % csv_path)
