@@ -1,102 +1,59 @@
-# Ring AllReduce harness
+# Ring AllReduce and model validity
 
-`htsim_ring` runs one simulation per process: a pinned two-host transfer, or one round-synchronous ring AllReduce. `ring_experiments.py` is the Experiment 1 / 2 suite. It writes `ring_results/all_runs.csv`.
+Two experiment sets share this directory. Both use fixed-rate paced RoCE from `sim/`. That sender is not DCQCN. ECN and PFC are off. Routes are pinned. A row is usable only when `valid=1`: every flow finished, and drops, strips, bounces, retransmissions, NACKs, pauses, and sink gaps are zero.
 
-Build from this directory:
+The ring schedule is round-synchronous: `n` transfers run together, and the next step starts after all of them finish. It is not an NCCL pipeline. `--seed` (default 1) is applied once with htsim's `mt19937` wrapper before the topology is built. The per-sender wall-clock reseed in `sim/roce.cpp` is commented out.
+
+## Layout
+
+```
+Makefile, main_ring.cpp, ring_*.cpp    ring harness, builds htsim_ring
+preliminary-experiments/               Experiments 1, 2, 3A, 3B
+model-validity/                        MV0–MV4 dumbbell suite, builds htsim_mv
+```
+
+Findings for MV0–MV4 are in `model-validity/results/RESULT_SUMMARY.md`. Preliminary results are the CSVs and the two `experiment3*_summary.txt` files next to them.
+
+## Build
+
+From this directory:
 
 ```bash
 make
+make -C model-validity
 ```
 
-## Files
+`make clean` and `make -C model-validity clean` remove the binaries and object files.
 
-Added here:
+## Preliminary rings
 
-- `main_ring.cpp` — parses the CLI and calls `run_ring_experiment`.
-- `ring_runner.cpp` / `ring_runner.h` — builds the fat tree, pins routes, installs barriers and RoCE flows, and prints the `RECORD` line.
-- `ring_planner.cpp` / `ring_planner.h` — selects the ring, pins each forward route, and computes `L_max`, `H_max`, and the static path cost. `TspPlanner` is unused by Experiments 1 and 2.
-- `ring_schedule.cpp` / `ring_schedule.h` — expands a ring into `2(n-1)` steps of `n` transfers of `s/n` bytes.
-- `ring_metrics.cpp` / `ring_metrics.h` — records each queue's run-long peak occupancy and bytes served.
-- `ring_experiments.py` — fits α and β from the P2P sweeps, then runs the three collectives.
-- `Makefile` — compiles those sources and links `libhtsim.a` plus the existing fat-tree objects.
+`htsim_ring` is one simulation per process. Experiment scripts live under `preliminary-experiments/`. Run them from this directory.
 
-Modified outside this directory:
+| Experiment | Question | Run |
+|---|---|---|
+| 1 | Does calibrated α-β match an uncontended same-leaf ring? | `cd preliminary-experiments/experiment1 && python3 ring_experiments.py` |
+| 2 | Does sharing one uplink change completion time when the static cost does not? | same script; it runs Experiment 2 only after Experiment 1 passes |
+| 3A | Does minimum propagation cost pick the fastest of 120 directed rings? | `python3 preliminary-experiments/experiment3a/ring_experiment3a.py` |
+| 3B | Can the propagation-cost optimum be slower than an uncontended ring? | `python3 preliminary-experiments/experiment3b/ring_experiment3b.py` |
 
-- `sim/roce.cpp` — the per-sender `srand(time(NULL))` is commented out, with a note, so a run no longer reseeds from the wall clock.
+Experiment 1 and 2 use `--mtu 9000 --queue-bytes 4608000 --seed 1` and a 2304000-byte collective. Calibration sizes are 8 through 256 packets. `--alpha-fit` and `--beta-fit` change only the printed prediction. Experiment 3A is a three-leaf fat tree, message 3456000 bytes, host 0 fixed, 120 directed rings. Experiment 3B is the same hosts split across two sites; `--experiment 4` selects that graph and the record says `experiment=3b`.
 
-## Reproduce
+`t_sim_s` is the sender-side completion of the last flow. `static_cost_ps` is one trip of forward propagation around the ring. `l_max` is the most one-step forward paths that share a queue.
 
-Run these from this directory. Shared flags are `--mtu 9000 --queue-bytes 4608000 --seed 1`. Message size for every collective is `2304000` bytes (`n = 4`, 64 packets of 9000 per chunk). Calibration sizes are 8, 16, 32, 64, 128, and 256 packets.
+## Model validity
 
-Experiment 1 P2P sweep, hosts 0→1 on one leaf. Repeat with `--bytes` set to `72000`, `144000`, `288000`, `576000`, `1152000`, and `2304000`:
+`htsim_mv` builds a dumbbell: each host has a 10 Gbps access link, and one 10 Gbps core is the shared bottleneck. Hop delay is 1 µs. MSS is 9000. Nominal sizes round up to a multiple of 9000. The core queue for MV0–MV3 is `(N-1) * wire_bytes + max(wire_bytes, 64 * MSS)`. MV4 uses a fixed 256 MiB queue. A data packet occupies 9064 bytes in the queue.
+
+MV0 fits `T = α + β * wire_bytes` on one sender. Later runs load that fit and do not refit it. MV1 scales the sender count. MV2 holds aggregate rate and total bytes fixed. MV3 staggers eight starts. MV4 keeps one foreground transfer and changes the timing of a background flow with the same nominal average rate. Background ON intervals are separate `--flow` transfers, not a flag.
+
+From `model-validity/`:
 
 ```bash
-./htsim_ring --mode p2p --experiment 1 --pin none --n 4 --bytes 72000 --mtu 9000 --queue-bytes 4608000 --seed 1
+python3 scripts/run_suite.py          # MV0–MV2; leaves MV3 and MV4 rows in place
+python3 scripts/run_mv3.py            # skips run ids already in runs.csv
+python3 scripts/run_mv4.py            # optional case names, e.g. none constant
+python3 scripts/validate_results.py
+python3 scripts/analyze.py
 ```
 
-Experiment 1 collective. The fit values are the ordinary-least-squares result of that sweep (`T = α + β · bytes`):
-
-```bash
-./htsim_ring --mode collective --experiment 1 --pin none --n 4 --bytes 2304000 --mtu 9000 --queue-bytes 4608000 --seed 1 --alpha-fit 1.8907682910447674e-05 --beta-fit 8.4541983279041307e-10
-```
-
-Experiment 2 P2P sweep, hosts 0→2 through spine 0. Same six sizes:
-
-```bash
-./htsim_ring --mode p2p --experiment 2 --pin spine0 --n 4 --bytes 72000 --mtu 9000 --queue-bytes 4608000 --seed 1
-```
-
-Experiment 2 spread and stack collectives:
-
-```bash
-./htsim_ring --mode collective --experiment 2 --pin spread --n 4 --bytes 2304000 --mtu 9000 --queue-bytes 4608000 --seed 1 --alpha-fit 3.7385481164179161e-05 --beta-fit 8.4733107319553014e-10
-./htsim_ring --mode collective --experiment 2 --pin stack --n 4 --bytes 2304000 --mtu 9000 --queue-bytes 4608000 --seed 1 --alpha-fit 3.7385481164179161e-05 --beta-fit 8.4733107319553014e-10
-```
-
-`--alpha-fit` and `--beta-fit` change only the printed prediction. Omit them and `t_sim_s` is unchanged; `t_fit_s` and `slowdown_fit` become 0. `python3 ring_experiments.py` runs this sequence and stops before Experiment 2 if Experiment 1 is invalid or `|slowdown_fit - 1| > 0.05`.
-
-## `all_runs.csv`
-
-One row per invocation. Times are seconds except where the name says otherwise. The fit columns are `na` or 0 on calibration rows because the fit is passed in only on the collective invocations.
-
-| Column | Meaning |
-|---|---|
-| `t_sim_s` | Sender-side completion of the last flow, in seconds. The flow is done when the cumulative ACK covers its size. |
-| `t_fit_s` | `2(n-1)·α_fit + 2(n-1)/n · bytes · β_fit`, in seconds. Zero when no fit was passed. |
-| `t_theory_s` | Same formula with theoretical α (sum of forward pipe delays on one edge) and β (`1 /` link bytes per second). |
-| `slowdown_fit` | `t_sim_s / t_fit_s`. |
-| `static_cost_ps` | Sum of forward-path propagation around the ring once, in picoseconds. One step, not `2(n-1)` steps, and not the ACK return. |
-| `l_max` | Most logical edges of one step whose forward data path shares one queue. ACK paths are not counted. |
-| `h_max_s` | `max over queues of (bytes offered to that queue by one step) / (queue rate in bytes/s)`, in seconds. |
-| `peak_queue_bytes` | Largest queue occupancy seen at enqueue or service, in bytes. |
-| `valid` | `1` only when every flow finished and drops, strips, bounces, retransmissions, NACKs, pauses, and sink gaps are all zero. |
-
-## Randomness
-
-`--seed` (default `1`) is applied with `srand` before the topology or any flow is created. The binary defines its own `srand`, `srandom`, `rand`, and `random`; those are htsim's `mt19937` wrappers in `sim/config.cpp`, so this does not use libc's generator. `srandom` is the same function.
-
-That generator is drawn three times on this path: each switch's hash salt during topology build, each `RoceSrc` path id (`random() % 256`, unused once the route is pinned), and the RoCE pacing jitter `rand() % (spacing / 10)` at flow start and between packets. The same `--seed` repeats `t_sim_s`. Seed 1 matches the checked-in calibration row (`8.0403402000000002e-05` for the 72000-byte Experiment 1 transfer); seed 2 does not.
-
-## What this is not
-
-This schedule is the homogeneous α-β ring: `n` transfers run together, and the next step starts only after all of them finish. It is not an NCCL pipeline, and chunks are not sent ahead across steps. Routes are pinned, including the ACK path; there is no ECMP, spraying, or PLB. The sender is fixed-rate RoCE at the 10 Gbps link rate, paced with the 64-byte ACK included in the gap, plus that jitter. ECN and PFC are off. A usable row has `valid=1`, so the recorded time contains no loss recovery. Switch latency is 0. α theory is forward propagation only; the fitted α is larger because completion includes pacing and the ACK return.
-
-## Experiment 3A
-
-Six hosts on three leaves of two, and two spines. Same 10 Gbps links and 1 µs hops. Cross-leaf routes use `spine = src % 2`. `c_ij` is that pinned forward propagation: 2 µs on a leaf, 4 µs across leaves. The search is all 120 directed rings with host 0 fixed. A ring and its reverse are both run, because the pin rule can put them on different spines.
-
-```bash
-python3 ring_experiment3.py
-```
-
-The message is `3456000` bytes. The script fits the same-leaf pair `0→1` and the cross-leaf pair `0→2`, asks `TspPlanner` which ring it selects, then runs every directed ring. Results go to `ring_results/experiment3.csv`. The fitted prediction is `2(n-1)` times the slowest edge's `α + (s/n)β`, so on this topology it is the same number for every ring.
-
-## Experiment 3B
-
-Same six hosts, message, chunk, queue, seed, and round-synchronous RoCE schedule. The graph is no longer a fat tree. Hosts 0, 1, 2 sit at the left site and 3, 4, 5 at the right. A same-site transfer is host, site switch, host: two 2 µs hops, 4 µs. An inter-site transfer is host, border, the single fiber, the other border, host: three 1 µs hops, 3 µs. The border does not hairpin, so the pin is that unique path. `--experiment 4` selects this graph; the `RECORD` line says `experiment=3b`.
-
-```bash
-python3 ring_experiment3b.py
-```
-
-The script fits same-site `0→1` and inter-site `0→3` separately, then runs Held-Karp and all 120 directed rings. Results go to `ring_results/experiment3b.csv`. The fitted prediction is still `2(n-1)` times the slower edge class that actually appears in that ring.
+Outputs are `results/runs.csv`, `flows.csv`, `links.csv`, `calibrations.csv`, `calibration_points.csv`, `plots/`, and `traces/`. Omitting `--starts-us` starts every flow at 0. The predictors in `scripts/mvlib.py` use configured starts, the core rate, the byte count, and the MV0 α. They do not read a simulated finish time.

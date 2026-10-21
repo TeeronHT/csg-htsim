@@ -1,0 +1,2 @@
+calibration_id,topology,bottleneck_gbps,propagation_us,mss_bytes,seed,sender_count,message_sizes_wire,alpha_us,beta_ns_per_byte,R2,git_commit,source
+mv0-ae90d1da87a5d234,dumbbell,10,1,9000,1,1,72000 135000 531000 1053000 4203000 8397000 16785000 33561000,2.8524150625530535e+01,8.4624149909627799e-01,9.9999996807267333e-01,bd82505c9e4d965214574def75de24d4dbc6137a,MV0_only

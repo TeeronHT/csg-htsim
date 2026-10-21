@@ -1,0 +1,6 @@
+{
+  "experiment_id": "MV0",
+  "nominal_message_bytes": [65536, 131072, 524288, 1048576, 4194304, 8388608, 16777216, 33554432],
+  "sender_count": 1,
+  "sender_rate_gbps": 10
+}

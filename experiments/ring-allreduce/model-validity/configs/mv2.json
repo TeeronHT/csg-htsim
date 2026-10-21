@@ -1,0 +1,18 @@
+{
+  "experiment_id": "MV2",
+  "sender_counts": [1, 2, 4, 8, 16],
+  "modes": {
+    "A": {
+      "sender_rate": "line",
+      "nominal_bytes_per_sender": 4194304
+    },
+    "B": {
+      "sender_rate": "line_over_n",
+      "nominal_bytes_per_sender": 4194304
+    },
+    "C": {
+      "sender_rate": "line_over_n",
+      "nominal_bytes_total": 33554432
+    }
+  }
+}

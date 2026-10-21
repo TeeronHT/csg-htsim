@@ -1,0 +1,16 @@
+{
+  "mss_bytes": 9000,
+  "sender_access_gbps": 10,
+  "receiver_access_gbps": 10,
+  "bottleneck_gbps": 10,
+  "propagation_us": 1,
+  "seed": 1,
+  "ecn_enabled": false,
+  "pfc_enabled": false,
+  "transport": "paced_roce",
+  "routing": "pinned",
+  "topology": "dumbbell",
+  "queue_policy": "deep_lossless",
+  "trace_level": "summary",
+  "endtime_s": 10
+}

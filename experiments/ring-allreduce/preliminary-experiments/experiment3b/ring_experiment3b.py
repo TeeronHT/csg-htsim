@@ -13,8 +13,9 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-BINARY = os.path.join(HERE, "htsim_ring")
-OUTDIR = os.path.join(HERE, "ring_results")
+ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
+BINARY = os.path.join(ROOT, "htsim_ring")
+OUTDIR = os.path.join(HERE, "results")
 MTU = 9000
 N = 6
 PACKETS_PER_CHUNK = 64

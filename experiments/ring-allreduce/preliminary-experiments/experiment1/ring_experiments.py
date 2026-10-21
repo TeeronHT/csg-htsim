@@ -10,8 +10,10 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-BINARY = os.path.join(HERE, "htsim_ring")
-OUTDIR = os.path.join(HERE, "ring_results")
+ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
+BINARY = os.path.join(ROOT, "htsim_ring")
+OUTDIR = os.path.join(HERE, "results")
+EXP2_OUTDIR = os.path.abspath(os.path.join(HERE, "..", "experiment2", "results"))
 MTU = 9000
 N = 4
 PACKETS_PER_CHUNK = 64
@@ -86,6 +88,7 @@ def main():
         sys.stderr.write("missing %s\n" % BINARY)
         sys.exit(1)
     os.makedirs(OUTDIR, exist_ok=True)
+    os.makedirs(EXP2_OUTDIR, exist_ok=True)
 
     print("Fitting experiment 1 on a same-leaf path")
     a1, b1, cal1 = collect_fit(1, "none")
@@ -136,7 +139,10 @@ def main():
             float(rec["t_sim_s"]) * 1e6, float(rec["t_fit_s"]) * 1e6, float(rec["slowdown_fit"]),
             rec["l_max"], float(rec["h_max_s"]) * 1e6, rec["peak_queue_bytes"]))
 
-    write_csv(os.path.join(OUTDIR, "all_runs.csv"), cal1 + [exp1] + cal2 + exp2)
+    combined = cal1 + [exp1] + cal2 + exp2
+    write_csv(os.path.join(OUTDIR, "all_runs.csv"), combined)
+    write_csv(os.path.join(OUTDIR, "experiment1.csv"), cal1 + [exp1])
+    write_csv(os.path.join(EXP2_OUTDIR, "experiment2.csv"), cal2 + exp2)
     spread, stack = exp2
     print("Summary")
     print("  exp1 slowdown_fit %.4f (L_max %s)" % (slow1, exp1["l_max"]))

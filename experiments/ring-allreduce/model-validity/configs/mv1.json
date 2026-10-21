@@ -1,0 +1,7 @@
+{
+  "experiment_id": "MV1",
+  "sender_counts": [1, 2, 4, 8, 16],
+  "nominal_message_bytes": [65536, 524288, 4194304, 33554432],
+  "sender_rate_gbps": 10,
+  "mode": "synchronized"
+}

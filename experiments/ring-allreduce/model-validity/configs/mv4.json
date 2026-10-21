@@ -1,0 +1,12 @@
+{
+  "experiment_id": "MV4",
+  "foreground_nominal_bytes": 33554432,
+  "foreground_rate_gbps": 10,
+  "background_on_gbps": 10,
+  "background_average_gbps": 5,
+  "duty_cycle": 0.5,
+  "periods_over_Tfg": [0.1, 1.0, 10.0],
+  "phase_fractions": [0.0, 0.5],
+  "horizon_over_Tfg": 4,
+  "queue_bytes": 268435456
+}
